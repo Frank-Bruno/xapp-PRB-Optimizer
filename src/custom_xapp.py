@@ -1,3 +1,5 @@
+# Imports form local libraries
+from asn1_defs.e2sm_kpm_rc import E2SM_KPM_RC
 
 # Imports from OSC libraries
 from ricxappframe.xapp_frame import RMRXapp, rmr
@@ -233,8 +235,11 @@ class XappNori:
         Handler for RIC indication messages.
         """
         self.logger.info(f"Received RIC indication message with summary: {summary}.")
-        
+
         # TODO: Decode ASN.1 APER coded payload
+        msg = summary["payload"]
+        # msg = bytes(msg, 'utf-8').decode('unicode_escape').encode()
+        # indication = E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1.from_aper(msg)
 
         # TODO: Handle the RIC indication message
 
