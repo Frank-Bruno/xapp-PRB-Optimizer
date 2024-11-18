@@ -1,5 +1,6 @@
 # Imports form local libraries
-from asn1_defs.e2sm_kpm_rc import E2SM_KPM_RC
+from .asn1_defs.e2sm_kpm_rc import E2SM_KPM_RC
+from .asn1_defs.e2ap_1_0 import E2AP_IEs, E2AP_PDU_Contents, E2AP_PDU_Descriptions
 
 # Imports from OSC libraries
 from ricxappframe.xapp_frame import RMRXapp, rmr
@@ -238,9 +239,70 @@ class XappNori:
 
         # TODO: Decode ASN.1 APER coded payload
         msg = summary["payload"]
-        # msg = bytes(msg, 'utf-8').decode('unicode_escape').encode()
-        # indication = E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1.from_aper(msg)
 
+        hex_msg = msg.hex()
+        self.logger.info(f"Hexed message: {hex_msg}")
+        
+        try:
+            self.logger.info(f"Decoding as E2AP_IEs.RICindicationHeader: {E2AP_IEs.RICindicationHeader.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_IEs.RICindicationHeader: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_IEs.RICindicationMessage: {E2AP_IEs.RICindicationMessage.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_IEs.RICindicationMessage: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_IEs.RICindicationSN: {E2AP_IEs.RICindicationSN.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_IEs.RICindicationSN: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_IEs.RICindicationType: {E2AP_IEs.RICindicationType.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_IEs.RICindicationType: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_PDU_Contents.RICindication: {E2AP_PDU_Contents.RICindication.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_PDU_Contents.RICindication: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_PDU_Contents.RICindication_IEs: {E2AP_PDU_Contents.RICindication_IEs.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_PDU_Contents.RICindication_IEs: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_PDU_Descriptions.E2AP_PDU: {E2AP_PDU_Descriptions.E2AP_PDU.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_PDU_Descriptions.E2AP_PDU: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2AP_PDU_Descriptions.ricIndication: {E2AP_PDU_Descriptions.ricIndication.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2AP_PDU_Descriptions.ricIndication: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationHeader: {E2SM_KPM_RC.E2SM_KPM_IndicationHeader.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationHeader: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationHeader_Format1: {E2SM_KPM_RC.E2SM_KPM_IndicationHeader_Format1.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationHeader_Format1: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationMessage: {E2SM_KPM_RC.E2SM_KPM_IndicationMessage.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationMessage: {}".format(e))
+
+        try:
+            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1: {E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1.from_aper(msg)}")
+        except Exception as e:
+            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1: {}".format(e))
+        
         # TODO: Handle the RIC indication message
 
         rmrxapp.rmr_free(sbuf)
