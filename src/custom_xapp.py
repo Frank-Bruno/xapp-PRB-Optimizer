@@ -1,6 +1,6 @@
 # Imports form local libraries
 from .asn1_defs.e2sm_kpm_rc import E2SM_KPM_RC
-from .asn1_defs.e2ap_1_0 import E2AP_IEs, E2AP_PDU_Contents, E2AP_PDU_Descriptions
+from .asn1_defs.e2ap_2_3 import E2AP_PDU_Descriptions
 
 # Imports from OSC libraries
 from ricxappframe.xapp_frame import RMRXapp, rmr
@@ -236,72 +236,40 @@ class XappNori:
         Handler for RIC indication messages.
         """
         self.logger.info(f"Received RIC indication message with summary: {summary}.")
-
-        # TODO: Decode ASN.1 APER coded payload
-        msg = summary["payload"]
-
-        hex_msg = msg.hex()
-        self.logger.info(f"Hexed message: {hex_msg}")
         
-        try:
-            self.logger.info(f"Decoding as E2AP_IEs.RICindicationHeader: {E2AP_IEs.RICindicationHeader.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_IEs.RICindicationHeader: {}".format(e))
+        msg = summary["payload"]
+        self.logger.debug(f"Received payload from RIC indication message: {msg}")
+        
+        # Decoding the E2AP PDU data
+        pdu = E2AP_PDU_Descriptions.E2AP_PDU
+        pdu.from_aper(msg)
+        decoded_pdu = pdu.get_val()
+        e2pdu_data = {
+            "ricRequestorID" : decoded_pdu[1]["value"][1]["protocolIEs"][0]["value"][1]["ricRequestorID"],
+            "ricInstanceID" : decoded_pdu[1]["value"][1]["protocolIEs"][0]["value"][1]["ricInstanceID"],
+            "RANfunctionID" : decoded_pdu[1]["value"][1]["protocolIEs"][1]["value"][1],
+            "RICactionID" : decoded_pdu[1]["value"][1]["protocolIEs"][2]["value"][1],
+            "RICindicationSN" : decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1],
+            "RICindicationType" : decoded_pdu[1]["value"][1]["protocolIEs"][4]["value"][1],
+            "RICcallProcessID" : decoded_pdu[1]["value"][1]["protocolIEs"][7]["value"][1]
+        }
 
-        try:
-            self.logger.info(f"Decoding as E2AP_IEs.RICindicationMessage: {E2AP_IEs.RICindicationMessage.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_IEs.RICindicationMessage: {}".format(e))
+        # Decoding the E2SM RIC Indication data
+        ric_indication_header_msg = decoded_pdu[1]["value"][1]["protocolIEs"][5]["value"][1]
+        ric_indication_message_msg = decoded_pdu[1]["value"][1]["protocolIEs"][6]["value"][1]
+        ric_indication_header = E2SM_KPM_RC.E2SM_KPM_IndicationHeader
+        ric_indication_message = E2SM_KPM_RC.E2SM_KPM_IndicationMessage
+        ric_indication_header.from_aper(ric_indication_header_msg)
+        ric_indication_message.from_aper(ric_indication_message_msg)
+        decoded_ric_indication_header = ric_indication_header.get_val()
+        decoded_ric_indication_message = ric_indication_message.get_val()
+        ric_indication_data = {
+            "indicationHeader" : decoded_ric_indication_header,
+            "indicationMessage" : decoded_ric_indication_message
+        }
 
-        try:
-            self.logger.info(f"Decoding as E2AP_IEs.RICindicationSN: {E2AP_IEs.RICindicationSN.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_IEs.RICindicationSN: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2AP_IEs.RICindicationType: {E2AP_IEs.RICindicationType.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_IEs.RICindicationType: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2AP_PDU_Contents.RICindication: {E2AP_PDU_Contents.RICindication.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_PDU_Contents.RICindication: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2AP_PDU_Contents.RICindication_IEs: {E2AP_PDU_Contents.RICindication_IEs.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_PDU_Contents.RICindication_IEs: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2AP_PDU_Descriptions.E2AP_PDU: {E2AP_PDU_Descriptions.E2AP_PDU.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_PDU_Descriptions.E2AP_PDU: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2AP_PDU_Descriptions.ricIndication: {E2AP_PDU_Descriptions.ricIndication.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2AP_PDU_Descriptions.ricIndication: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationHeader: {E2SM_KPM_RC.E2SM_KPM_IndicationHeader.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationHeader: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationHeader_Format1: {E2SM_KPM_RC.E2SM_KPM_IndicationHeader_Format1.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationHeader_Format1: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationMessage: {E2SM_KPM_RC.E2SM_KPM_IndicationMessage.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationMessage: {}".format(e))
-
-        try:
-            self.logger.info(f"Decoding as E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1: {E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1.from_aper(msg)}")
-        except Exception as e:
-            self.logger.error("Failed to decode as E2SM_KPM_RC.E2SM_KPM_IndicationMessage_Format1: {}".format(e))
+        self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
+        self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
         
         # TODO: Handle the RIC indication message
 
