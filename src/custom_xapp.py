@@ -303,11 +303,11 @@ class XappNori:
         ) # Initiating HTTP response
         
         # Resubscribing if RtMgr did not create xApp routes
-        if sub_resp["SubscriptionInstances"] is not None:
-            for sub_inst in sub_resp["SubscriptionInstances"]:
-                if "CREATE routeinfo" in sub_inst["ErrorCause"]:
-                    self.logger.error("RtMgr did not creat a route to the xApp yet, resubscribing to E2 Nodes...")
-                    Thread(target=self.resubscribe_to_e2_nodes).start()
+        # if sub_resp["SubscriptionInstances"] is not None:
+        #    for sub_inst in sub_resp["SubscriptionInstances"]:
+        #        if "CREATE routeinfo" in sub_inst["ErrorCause"]:
+        #            self.logger.error("RtMgr did not creat a route to the xApp yet, resubscribing to E2 Nodes...")
+        #            Thread(target=self.resubscribe_to_e2_nodes).start()
         return response
 
     def config_handler(self, name:str, path:str, data:bytes, ctype:str):
