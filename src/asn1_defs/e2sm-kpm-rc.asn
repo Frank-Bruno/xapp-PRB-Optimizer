@@ -546,6 +546,7 @@ E2SM-RC-ControlHeader-Format1 ::= SEQUENCE{
 	ueId			UE-Identity,
 	ric-ControlStyle-Type	RIC-Style-Type,
 	ric-ControlAction-ID	RIC-ControlAction-ID,
+	slicePRBQuota 		    SlicePRBQuota OPTIONAL,
 	...
 }
 
@@ -557,6 +558,14 @@ E2SM-RC-ControlHeader-Format1 ::= SEQUENCE{
 
 E2SM-RC-ControlMessage ::= CHOICE{
 	controlMessage-Format1	E2SM-RC-ControlMessage-Format1,
+	...
+}
+
+SlicePRBQuota ::= SEQUENCE {
+	sliceID		S-NSSAI,
+	minPRBRatio   INTEGER (0..100), -- Min Ratio PRB Quota
+	maxPRBRatio   INTEGER (0..100), -- Max Ratio PRB Quota
+	dedicatePRBRatio INTEGER (0..100),  -- Dedicated PRB Quota
 	...
 }
 
