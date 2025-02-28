@@ -32,6 +32,7 @@ asn1_pdu.from_aper(coded_pdu)
 decoded_pdu = asn1_pdu.get_val()
 print(f"\n\n\n################\nDecoded PDU: {decoded_pdu}")
 
+# Decoding RIC Control Header
 coded_control = decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1]
 asn1_control_header.from_aper(coded_control)
 decoded_control = asn1_control_header.get_val()
