@@ -14,7 +14,11 @@ from threading import Thread
 import signal
 import json
 import requests
+import numpy as np
 from typing import Dict
+from .env import train_sb3
+from .aux_xapp_rl import AuxXappRl
+import csv
 
 class XappNori:
     """
@@ -45,6 +49,11 @@ class XappNori:
             rmr_wait_for_ready=True, # Block xApp initiation until RMR is ready
             use_fake_sdl=False # Use a fake in-memory SDL
         )
+
+        # RL env
+        self.aux_xapp_rl = AuxXappRl()
+        self.env_thread = Thread(target=train_sb3, daemon=True)
+        self.env_thread.start()
 
         # Registering RMR message handlers
         self._rmrxapp.register_callback(handler=self.ric_indication_handler, message_type=12050)
@@ -235,10 +244,10 @@ class XappNori:
         """
         Handler for RIC indication messages.
         """
-        self.logger.info(f"Received RIC indication message with summary: {summary}.")
+        # self.logger.info(f"Received RIC indication message with summary: {summary}.")
         
         msg = summary["payload"]
-        self.logger.debug(f"Received payload from RIC indication message: {msg}")
+        # self.logger.debug(f"Received payload from RIC indication message: {msg}")
         
         # Decoding the E2AP PDU data
         pdu = E2AP_PDU_Descriptions.E2AP_PDU
@@ -268,13 +277,44 @@ class XappNori:
             "indicationMessage" : decoded_ric_indication_message
         }
 
-        self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
-        self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
+        # self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
+        # self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
 
+        ########### Interaction with RL Environment
+        # Observation
+        slice_1_avg_thr = 4
+        slice_2_avg_thr = 20
+        self.aux_xapp_rl.write_obs(slice_1_avg_thr, slice_2_avg_thr)
+        action = self.aux_xapp_rl.read_action(time=0.001)
+        print("Action: ", action)
+        ###################################
+
+        # Sending the RAN slicing control message to the RIC
+        for slice_id in range(2):
+            sst = b'\x01' if slice_id == 1 else b'\x00'
+            sd = b'\x00\x00\x00'
+            self.send_ran_slicing_control(sst, sd, action[slice_id], rmrxapp, summary, sbuf)
+    
+        rmrxapp.rmr_free(sbuf)
+
+        
+    
+    # ------------------ HTTP HANDLERS
+
+    def send_ran_slicing_control(self, sst:bytes, sd:bytes, action:int, rmrxapp: RMRXapp, summary: dict, sbuf):
+        """
+        Sends a RAN slicing control message to the RIC.
+        """
+
+        dedicated = action
+        maximum = 100
+        minimum = action
         ####### Creating RIC Control Request to control PRB slice quota
         # Encoding RIC Control Header
         asn1_control_header = E2SM_KPM_RC.E2SM_RC_ControlHeader
-        ric_control_header = ('controlHeader-Format1', {"ueId":b'\x00\x01', "ric-ControlStyle-Type": 1, "ric-ControlAction-ID": 1, "slicePRBQuota": {"sliceID": {"sST": b'\x00', "sD": b'\x00\x01\x03'}, "dedicatePRBRatio": 20, "minPRBRatio": 40, "maxPRBRatio":80}})
+        #ric_control_header = ('controlHeader-Format1', {"ueId":b'\x00\x01', "ric-ControlStyle-Type": 1, "ric-ControlAction-ID": 1, "slicePRBQuota": {"sliceID": {"sST": b'\x00', "sD": b'\x00\x01\x03'}, "dedicatePRBRatio": 20, "minPRBRatio": 40, "maxPRBRatio":80}})
+        ric_control_header = ('controlHeader-Format1', {"ueId":b'\x00\x01', "ric-ControlStyle-Type": 1, "ric-ControlAction-ID": 1, "slicePRBQuota": {"sliceID": {"sST": sst, "sD": sd}, "dedicatePRBRatio": int(dedicated), "minPRBRatio": int(minimum), "maxPRBRatio": int(maximum)}})
+
         asn1_control_header.set_val(ric_control_header)
         coded_control_header = asn1_control_header.to_aper()
 
@@ -285,7 +325,7 @@ class XappNori:
                 'criticality': 'ignore',
                 'value': ('RICcontrolRequest', {
                         'protocolIEs': [
-                            {'id': 29, "criticality": 'reject', "value":('RICrequestID', {'ricRequestorID': 1, 'ricInstanceID': 1})},
+                            {'id': 29, "criticality": 'reject', "value":('RICrequestID', {'ricRequestorID': 1003, 'ricInstanceID': 1})},
                             {'id': 5, "criticality": 'reject', "value":('RANfunctionID',200)},
                             {'id': 20, "criticality": 'reject', "value":('RICcallProcessID', b'\x00\x01')},
                             {'id': 22, "criticality": 'reject', "value":('RICcontrolHeader', coded_control_header)},
@@ -304,19 +344,13 @@ class XappNori:
         # Decoding RIC Control Request
         asn1_pdu.from_aper(coded_pdu)
         decoded_pdu = asn1_pdu.get_val()
-        self.logger.info(f"\n\n\n################\nDecoded PDU: {decoded_pdu}")
+        # self.logger.info(f"\n\n\n################\nDecoded PDU: {decoded_pdu}")
 
         # Decoding RIC Control Header
         coded_control = decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1]
         asn1_control_header.from_aper(coded_control)
         decoded_control = asn1_control_header.get_val()
-        self.logger.info(f"\n\n\n################\nDecoded Control Header: {decoded_control}")
-
-        # TODO: Handle the RIC indication message
-
-        rmrxapp.rmr_free(sbuf)
-    
-    # ------------------ HTTP HANDLERS
+        # self.logger.info(f"\n\n\n################\nDecoded Control Header: {decoded_control}")
 
     def resubscribe_handler(self, name:str, path:str, data:bytes, ctype:str):
         """
