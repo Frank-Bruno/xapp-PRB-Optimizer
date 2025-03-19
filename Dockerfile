@@ -26,7 +26,7 @@ RUN git clone --branch $rmr_version https://gerrit.oran-osc.org/r/ric-plt/lib/rm
     && echo "<<< installing rmr .so>>>" \
     && cmake .. -DDEV_PKG=0; make install
 
-FROM python:3.8-alpine
+FROM python:3.10
 
 #ARG frame_version=3.2.0
 ARG frame_version=i-release
@@ -38,7 +38,10 @@ COPY --from=bldr /usr/local/lib64/librmr* /usr/local/lib64/
 ENV LD_LIBRARY_PATH=/usr/local/lib/:/usr/local/lib64
 
 # sdl needs gcc
-RUN apk update && apk add gcc musl-dev bash git
+RUN apt update && apt install -y gcc bash git musl-dev
+
+# Add dependencies for numpy
+RUN apt install -y gfortran build-essential
 
 # RMR setup
 RUN mkdir -p /opt/route/
@@ -47,7 +50,8 @@ ENV RMR_SEED_RT=/opt/route/routes.rt
 ENV RMR_LOG_VLEVEL=4
 
 RUN git clone -b ${frame_version} https://github.com/o-ran-sc/ric-plt-xapp-frame-py /ric-plt-xapp-frame-py/
-RUN pip install --upgrade pip && pip install certifi six python_dateutil setuptools urllib3 logger requests inotify_simple mdclogpy google-api-python-client msgpack ricsdl pycrate
+RUN pip install --upgrade pip && pip install certifi six python_dateutil setuptools urllib3 logger requests inotify_simple mdclogpy google-api-python-client msgpack ricsdl pycrate stable-baselines3[extra]
+RUN ln -s /usr/lib/x86_64-linux-musl/libc.so /lib/libc.musl-x86_64.so.1
 RUN touch /ric-plt-xapp-frame-py/ricxappframe/entities/__init__.py && touch /ric-plt-xapp-frame-py/ricxappframe/entities/rnib/__init__.py
 RUN pip install /ric-plt-xapp-frame-py/
 

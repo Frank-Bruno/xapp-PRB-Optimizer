@@ -169,6 +169,7 @@ class E2SM_KPM_RC:
         'E2SM-RC-ControlHeader',
         'E2SM-RC-ControlHeader-Format1',
         'E2SM-RC-ControlMessage',
+        'SlicePRBQuota',
         'E2SM-RC-ControlMessage-Format1',
         'RANParameter-Item',
         'RANParameter-ValueType',
@@ -298,6 +299,7 @@ class E2SM_KPM_RC:
         'E2SM-RC-ControlHeader',
         'E2SM-RC-ControlHeader-Format1',
         'E2SM-RC-ControlMessage',
+        'SlicePRBQuota',
         'E2SM-RC-ControlMessage-Format1',
         'RANParameter-Item',
         'RANParameter-ValueType',
@@ -1480,10 +1482,12 @@ class E2SM_KPM_RC:
     _E2SM_RC_ControlHeader_Format1_ueId = OCT_STR(name='ueId', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'UE-Identity')))
     _E2SM_RC_ControlHeader_Format1_ric_ControlStyle_Type = INT(name='ric-ControlStyle-Type', mode=MODE_TYPE, tag=(1, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'RIC-Style-Type')))
     _E2SM_RC_ControlHeader_Format1_ric_ControlAction_ID = INT(name='ric-ControlAction-ID', mode=MODE_TYPE, tag=(2, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'RIC-ControlAction-ID')))
+    _E2SM_RC_ControlHeader_Format1_slicePRBQuota = SEQ(name='slicePRBQuota', mode=MODE_TYPE, tag=(3, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'SlicePRBQuota')), opt=True)
     E2SM_RC_ControlHeader_Format1._cont = ASN1Dict([
         ('ueId', _E2SM_RC_ControlHeader_Format1_ueId),
         ('ric-ControlStyle-Type', _E2SM_RC_ControlHeader_Format1_ric_ControlStyle_Type),
         ('ric-ControlAction-ID', _E2SM_RC_ControlHeader_Format1_ric_ControlAction_ID),
+        ('slicePRBQuota', _E2SM_RC_ControlHeader_Format1_slicePRBQuota),
         ])
     E2SM_RC_ControlHeader_Format1._ext = []
     
@@ -1494,6 +1498,23 @@ class E2SM_KPM_RC:
         ('controlMessage-Format1', _E2SM_RC_ControlMessage_controlMessage_Format1),
         ])
     E2SM_RC_ControlMessage._ext = []
+    
+    #-----< SlicePRBQuota >-----#
+    SlicePRBQuota = SEQ(name='SlicePRBQuota', mode=MODE_TYPE)
+    _SlicePRBQuota_sliceID = SEQ(name='sliceID', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'S-NSSAI')))
+    _SlicePRBQuota_minPRBRatio = INT(name='minPRBRatio', mode=MODE_TYPE, tag=(1, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
+    _SlicePRBQuota_minPRBRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
+    _SlicePRBQuota_maxPRBRatio = INT(name='maxPRBRatio', mode=MODE_TYPE, tag=(2, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
+    _SlicePRBQuota_maxPRBRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
+    _SlicePRBQuota_dedicatePRBRatio = INT(name='dedicatePRBRatio', mode=MODE_TYPE, tag=(3, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
+    _SlicePRBQuota_dedicatePRBRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
+    SlicePRBQuota._cont = ASN1Dict([
+        ('sliceID', _SlicePRBQuota_sliceID),
+        ('minPRBRatio', _SlicePRBQuota_minPRBRatio),
+        ('maxPRBRatio', _SlicePRBQuota_maxPRBRatio),
+        ('dedicatePRBRatio', _SlicePRBQuota_dedicatePRBRatio),
+        ])
+    SlicePRBQuota._ext = []
     
     #-----< E2SM-RC-ControlMessage-Format1 >-----#
     E2SM_RC_ControlMessage_Format1 = SEQ(name='E2SM-RC-ControlMessage-Format1', mode=MODE_TYPE)
@@ -2116,9 +2137,15 @@ class E2SM_KPM_RC:
         _E2SM_RC_ControlHeader_Format1_ueId,
         _E2SM_RC_ControlHeader_Format1_ric_ControlStyle_Type,
         _E2SM_RC_ControlHeader_Format1_ric_ControlAction_ID,
+        _E2SM_RC_ControlHeader_Format1_slicePRBQuota,
         E2SM_RC_ControlHeader_Format1,
         _E2SM_RC_ControlMessage_controlMessage_Format1,
         E2SM_RC_ControlMessage,
+        _SlicePRBQuota_sliceID,
+        _SlicePRBQuota_minPRBRatio,
+        _SlicePRBQuota_maxPRBRatio,
+        _SlicePRBQuota_dedicatePRBRatio,
+        SlicePRBQuota,
         __E2SM_RC_ControlMessage_Format1_ranParameters_List__item_,
         _E2SM_RC_ControlMessage_Format1_ranParameters_List,
         E2SM_RC_ControlMessage_Format1,
