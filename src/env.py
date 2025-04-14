@@ -1,20 +1,27 @@
-import os
-
-os.environ["RAY_TRAIN_V2_ENABLED"] = "1"
-
 from gymnasium import spaces, Env
 import numpy as np
 import csv
 import threading
+import tempfile
+import onnxruntime
 from ray import train, tune
-from ray.rllib.algorithms.ppo import PPOConfig, PPO
+from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.env.tcp_client_inference_env_runner import (
     TcpClientInferenceEnvRunner,
+    _send_message,
+    _get_message,
 )
+import base64
+import gzip
+import socket
+import time
+from ray.rllib.env.utils.external_env_protocol import RLlink as rllink
+from ray.rllib.core import Columns
+import torch as th
 
 
 class MobNet(Env):
-    def __init__(self):
+    def __init__(self, env_config=None):
         super(MobNet, self).__init__()
         self.steps_per_episode = 1000
         self.curr_step = 0
@@ -66,11 +73,153 @@ class MobNet(Env):
         return reward
 
 
-def client_rl():
+def client_rl(port: int = 5555):
+    def _set_state(msg_body):
+        with tempfile.TemporaryDirectory():
+            with open("_temp_onnx", "wb") as f:
+                f.write(
+                    gzip.decompress(
+                        base64.b64decode(msg_body["onnx_file"].encode("utf-8"))
+                    )
+                )
+                onnx_session = onnxruntime.InferenceSession("_temp_onnx")
+                output_names = [o.name for o in onnx_session.get_outputs()]
+        return onnx_session, output_names
+
+    # Connect to server.
+    while True:
+        try:
+            print(f"Trying to connect to localhost:{port} ...")
+            sock_ = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock_.connect(("localhost", port))
+            break
+        except ConnectionRefusedError:
+            time.sleep(5)
+
+    # Send ping-pong.
+    _send_message(sock_, {"type": rllink.PING.name})
+    msg_type, msg_body = _get_message(sock_)
+    assert msg_type == rllink.PONG
+
+    # Request config.
+    _send_message(sock_, {"type": rllink.GET_CONFIG.name})
+    msg_type, msg_body = _get_message(sock_)
+    assert msg_type == rllink.SET_CONFIG
+    env_steps_per_sample = msg_body["env_steps_per_sample"]
+    force_on_policy = msg_body["force_on_policy"]
+
+    # Request ONNX weights.
+    _send_message(sock_, {"type": rllink.GET_STATE.name})
+    msg_type, msg_body = _get_message(sock_)
+    assert msg_type == rllink.SET_STATE
+    onnx_session, output_names = _set_state(msg_body)
+
+    # Episode collection buckets.
+    episodes = []
+    observations = []
+    actions = []
+    action_dist_inputs = []
+    action_logps = []
+    rewards = []
+
+    timesteps = 0
+    episode_return = 0.0
+
+    # Start actual env loop.
     env = MobNet()
-    total_timesteps = int(1e9)
-    model = PPO("MlpPolicy", env, verbose=0, tensorboard_log=f"./tensorboard-logs/ppo/")
-    model.learn(total_timesteps=total_timesteps)
+    obs, info = env.reset()
+    observations.append(obs.tolist())
+
+    while True:
+        timesteps += 1
+        # Perform action inference using the ONNX model.
+        logits = onnx_session.run(
+            output_names,
+            {"onnx::Gemm_0": np.array([obs], np.float32)},
+        )[0][
+            0
+        ]  # [0]=first return item, [0]=batch size 1
+
+        # Stochastic sample.
+        assert env.action_space.shape is not None, "Action space is not defined."
+        mean = th.from_numpy(logits[0 : env.action_space.shape[0]])
+        log_std = th.from_numpy(logits[env.action_space.shape[0] :])
+        std = th.exp(log_std)
+        dist = th.distributions.Normal(mean, std)
+        action = dist.sample()
+        logp = dist.log_prob(action)
+        squashed = th.tanh(action)  # Now in [-1, 1]
+        # Scale to [0.1, 1.0]
+        assert isinstance(env.action_space, spaces.Box), "Action space is not Box."
+        low, high = env.action_space.low, env.action_space.high
+        action_scaled = (squashed + 1) / 2 * (high - low) + low
+
+        # Perform the env step.
+        assert isinstance(action_scaled, th.Tensor), "Action is not a Torch tensor."
+        obs, reward, terminated, truncated, info = env.step(action_scaled.numpy())
+
+        # Collect step data.
+        observations.append(obs.tolist())
+        actions.append(action.tolist())
+        action_dist_inputs.append(logits.tolist())
+        action_logps.append(logp.tolist())
+        rewards.append(reward)
+        episode_return += reward
+
+        # We have to create a new episode record.
+        if timesteps == env_steps_per_sample or terminated or truncated:
+            episodes.append(
+                {
+                    Columns.OBS: observations,
+                    Columns.ACTIONS: actions,
+                    Columns.ACTION_DIST_INPUTS: action_dist_inputs,
+                    Columns.ACTION_LOGP: action_logps,
+                    Columns.REWARDS: rewards,
+                    "is_terminated": terminated,
+                    "is_truncated": truncated,
+                }
+            )
+            # We collected enough samples -> Send them to server.
+            if timesteps == env_steps_per_sample:
+                # Make sure the amount of data we collected is correct.
+                assert sum(len(e["actions"]) for e in episodes) == env_steps_per_sample
+
+                # Send the data to the server.
+                if force_on_policy:
+                    _send_message(
+                        sock_,
+                        {
+                            "type": rllink.EPISODES_AND_GET_STATE.name,
+                            "episodes": episodes,
+                            "timesteps": timesteps,
+                        },
+                    )
+                    # We are forced to sample on-policy. Have to wait for a response
+                    # with the state (weights) in it.
+                    msg_type, msg_body = _get_message(sock_)
+                    assert msg_type == rllink.SET_STATE
+                    onnx_session, output_names = _set_state(msg_body)
+
+                # Sampling doesn't have to be on-policy -> continue collecting
+                # samples.
+                else:
+                    raise NotImplementedError
+
+                episodes = []
+                timesteps = 0
+
+            # Set new buckets to empty lists (for next episode).
+            observations = [observations[-1]]
+            actions = []
+            action_dist_inputs = []
+            action_logps = []
+            rewards = []
+
+            # The episode is done -> Reset.
+            if terminated or truncated:
+                obs, _ = env.reset()
+                observations = [obs.tolist()]
+                episode_return = 0.0
 
 
 def server_rl():
@@ -111,13 +260,13 @@ def server_rl():
             env_runner_cls=TcpClientInferenceEnvRunner,
         )
     )
-    results = tune.Tuner(
+    tune.Tuner(
         "PPO",
         param_space=config,
-        run_config=train.RunConfig(  # type: ignore
+        run_config=tune.RunConfig(  # type: ignore
             storage_path=ray_storage + agent_name,
             name=agent_name,
-            checkpoint_config=train.CheckpointConfig(num_to_keep=10),
+            checkpoint_config=tune.CheckpointConfig(num_to_keep=10),
             # stop=stop, TODO
         ),
     ).fit()
@@ -125,4 +274,6 @@ def server_rl():
 
 # Example usage
 if __name__ == "__main__":
-    server_rl()
+    server_thread = threading.Thread(target=server_rl)
+    server_thread.start()
+    client_rl()

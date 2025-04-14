@@ -6,6 +6,10 @@ name = "pypi"
 [packages]
 ray = {extras = ["rllib"], version = "*"}
 onnxruntime = "*"
+torch = "*"
+pydantic = "*"
+pillow = "*"
+onnx = "*"
 
 [dev-packages]
 
