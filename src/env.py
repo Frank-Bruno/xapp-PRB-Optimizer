@@ -1,9 +1,11 @@
 from gymnasium import spaces, Env
+import argparse
 import numpy as np
 import csv
 import threading
 import tempfile
 import onnxruntime
+import ray
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.env.tcp_client_inference_env_runner import (
@@ -18,10 +20,17 @@ import time
 from ray.rllib.env.utils.external_env_protocol import RLlink as rllink
 from ray.rllib.core import Columns
 import torch as th
+from ray.tune import CLIReporter
+from ray.rllib.utils.metrics import (
+    ENV_RUNNER_RESULTS,
+    EPISODE_RETURN_MEAN,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
+)
+from ray.tune.result import TRAINING_ITERATION
 
 
 class MobNet(Env):
-    def __init__(self, env_config=None):
+    def __init__(self, env_config=None, debug=False):
         super(MobNet, self).__init__()
         self.steps_per_episode = 1000
         self.curr_step = 0
@@ -37,15 +46,17 @@ class MobNet(Env):
         }
 
         self.slice_req = np.array([5, 10])
+        self.debug = debug
 
     def step(self, action):
         perc_action = np.floor((action / np.sum(action)) * 100)
         obs = self.observation_space.sample()  # TODO check this
         reward = self.calculate_reward(obs)
         terminated, truncated = False, False
-        print(
-            f"Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward} Action: {perc_action}, Obs: {obs}, Req: {self.slice_req}"
-        )
+        if self.debug:
+            print(
+                f"Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward} Action: {perc_action}, Obs: {obs}, Req: {self.slice_req}"
+            )
         self.curr_step += 1
         if self.curr_step > self.steps_per_episode:
             terminated = truncated = True
@@ -73,7 +84,7 @@ class MobNet(Env):
         return reward
 
 
-def client_rl(port: int = 5555):
+def client_rl(port: int = 5556):
     def _set_state(msg_body):
         with tempfile.TemporaryDirectory():
             with open("_temp_onnx", "wb") as f:
@@ -87,6 +98,7 @@ def client_rl(port: int = 5555):
         return onnx_session, output_names
 
     # Connect to server.
+    weights_seq_no = 0
     while True:
         try:
             print(f"Trying to connect to localhost:{port} ...")
@@ -126,7 +138,7 @@ def client_rl(port: int = 5555):
     episode_return = 0.0
 
     # Start actual env loop.
-    env = MobNet()
+    env = MobNet(debug=True)
     obs, info = env.reset()
     observations.append(obs.tolist())
 
@@ -189,13 +201,14 @@ def client_rl(port: int = 5555):
                     _send_message(
                         sock_,
                         {
-                            "type": rllink.EPISODES_AND_GET_STATE.name,
+                            "type": rllink.EPISODES.name,
                             "episodes": episodes,
-                            "timesteps": timesteps,
+                            "weights_seq_no": weights_seq_no,
                         },
                     )
                     # We are forced to sample on-policy. Have to wait for a response
                     # with the state (weights) in it.
+                    _send_message(sock_, {"type": rllink.GET_STATE.name})
                     msg_type, msg_body = _get_message(sock_)
                     assert msg_type == rllink.SET_STATE
                     onnx_session, output_names = _set_state(msg_body)
@@ -223,6 +236,7 @@ def client_rl(port: int = 5555):
 
 
 def server_rl():
+    ray.init(local_mode=True)
     ray_storage = "/tmp/ray_storage/"
     agent_name = "ppo"
     checkpoint_frequency = 1
@@ -259,6 +273,14 @@ def server_rl():
         .env_runners(
             env_runner_cls=TcpClientInferenceEnvRunner,
         )
+        .debugging(log_level="INFO")
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
+    )
+    progress_reporter = CLIReporter(
+        metric_columns=["episode_reward_mean", "training_iteration"]
     )
     tune.Tuner(
         "PPO",
@@ -268,12 +290,33 @@ def server_rl():
             name=agent_name,
             checkpoint_config=tune.CheckpointConfig(num_to_keep=10),
             # stop=stop, TODO
+            progress_reporter=progress_reporter,
         ),
     ).fit()
+    ray.shutdown()
 
 
 # Example usage
 if __name__ == "__main__":
-    server_thread = threading.Thread(target=server_rl)
-    server_thread.start()
-    client_rl()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--client",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+    )
+    args = parser.parse_args()
+    if args.client:
+        client_rl()
+    elif args.server:
+        server_rl()
+    else:
+        # server_thread = threading.Thread(target=server_rl)
+        # server_thread.start()
+        # client_rl()
+        # Reverse
+        client_thread = threading.Thread(target=client_rl)
+        client_thread.start()
+        server_rl()
