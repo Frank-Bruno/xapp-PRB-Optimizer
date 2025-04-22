@@ -39,25 +39,27 @@ class MobNet(Env):
 
     def step(self, action):
         perc_action = np.floor((action / np.sum(action)) * 100)
-        obs = self.observation_space.sample()  # TODO check this
-        reward = self.calculate_reward(obs)
+        reward = self.calculate_reward(self.obs)
         terminated, truncated = False, False
         if self.debug:
             print(
-                f"Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward} Action: {perc_action}, Obs: {obs}, Req: {self.slice_req}"
+                f"Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward} Action: {perc_action}, Obs: {self.obs}, Req: {self.slice_req}"
             )
         self.curr_step += 1
         if self.curr_step > self.steps_per_episode:
             terminated = truncated = True
             self.curr_ep += 1
 
-        return obs, reward, terminated, truncated, {}
+        return self.obs, reward, terminated, truncated, {}
 
     def reset(self, seed=None, options=None):
         self.curr_step = 0
         if self.curr_ep > self.max_number_ep:
             self.curr_ep = 0
         return np.array([0, 0]), {}
+
+    def set_obs(self, obs):
+        self.obs = obs
 
     def calculate_reward(
         self,
