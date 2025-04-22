@@ -4,16 +4,15 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-ray = {extras = ["rllib"], version = "*"}
-onnxruntime = "*"
+ray = {extras = ["rllib"], version = "==2.9.3"}
+packaging = "*"
+setuptools = "<65"
 torch = "*"
-pydantic = "*"
-pillow = "*"
-onnx = "*"
+numpy = "==1.26.4"
 
 [dev-packages]
-tensorboard = "*"
 torch-tb-profiler = "*"
+tensorboard = "*"
 
 [requires]
 python_version = "3.10"

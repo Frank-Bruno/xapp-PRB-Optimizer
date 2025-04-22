@@ -1,32 +1,21 @@
-from gymnasium import spaces, Env
 import argparse
+from pathlib import Path
+
 import numpy as np
-import csv
-import threading
-import tempfile
-import onnxruntime
+from gymnasium import Env, spaces
+from ray.rllib.algorithms.algorithm import Algorithm
+from ray.rllib.env.policy_client import PolicyClient
+import argparse
+import os
+from math import inf
+from pathlib import Path
 import ray
-from ray import train, tune
-from ray.rllib.algorithms.ppo import PPOConfig
-from ray.rllib.env.tcp_client_inference_env_runner import (
-    TcpClientInferenceEnvRunner,
-    _send_message,
-    _get_message,
-)
-import base64
-import gzip
-import socket
-import time
-from ray.rllib.env.utils.external_env_protocol import RLlink as rllink
-from ray.rllib.core import Columns
-import torch as th
-from ray.tune import CLIReporter
-from ray.rllib.utils.metrics import (
-    ENV_RUNNER_RESULTS,
-    EPISODE_RETURN_MEAN,
-    NUM_ENV_STEPS_SAMPLED_LIFETIME,
-)
-from ray.tune.result import TRAINING_ITERATION
+from ray import air, tune
+from ray.rllib.algorithms.ppo import PPO
+from ray.rllib.env.policy_server_input import PolicyServerInput
+from ray.tune.registry import get_trainable_cls
+import threading
+from time import sleep
 
 
 class MobNet(Env):
@@ -84,168 +73,85 @@ class MobNet(Env):
         return reward
 
 
-def client_rl(port: int = 5556):
-    def _set_state(msg_body):
-        with tempfile.TemporaryDirectory():
-            with open("_temp_onnx", "wb") as f:
-                f.write(
-                    gzip.decompress(
-                        base64.b64decode(msg_body["onnx_file"].encode("utf-8"))
-                    )
-                )
-                onnx_session = onnxruntime.InferenceSession("_temp_onnx")
-                output_names = [o.name for o in onnx_session.get_outputs()]
-        return onnx_session, output_names
+def client_rl(test_mode: bool = False):
+    SERVER_ADDRESS = "localhost"
+    RAY_STORAGE = "./ray_results/"
+    AGENT_NAME = "ppo"
+    SERVER_BASE_PORT = 9900
+    env = MobNet()
 
-    # Connect to server.
-    weights_seq_no = 0
-    while True:
-        try:
-            print(f"Trying to connect to localhost:{port} ...")
-            sock_ = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock_.connect(("localhost", port))
-            break
-        except ConnectionRefusedError:
-            time.sleep(5)
-
-    # Send ping-pong.
-    _send_message(sock_, {"type": rllink.PING.name})
-    msg_type, msg_body = _get_message(sock_)
-    assert msg_type == rllink.PONG
-
-    # Request config.
-    _send_message(sock_, {"type": rllink.GET_CONFIG.name})
-    msg_type, msg_body = _get_message(sock_)
-    assert msg_type == rllink.SET_CONFIG
-    env_steps_per_sample = msg_body["env_steps_per_sample"]
-    force_on_policy = msg_body["force_on_policy"]
-
-    # Request ONNX weights.
-    _send_message(sock_, {"type": rllink.GET_STATE.name})
-    msg_type, msg_body = _get_message(sock_)
-    assert msg_type == rllink.SET_STATE
-    onnx_session, output_names = _set_state(msg_body)
-
-    # Episode collection buckets.
-    episodes = []
-    observations = []
-    actions = []
-    action_dist_inputs = []
-    action_logps = []
-    rewards = []
-
-    timesteps = 0
-    episode_return = 0.0
-
-    # Start actual env loop.
-    env = MobNet(debug=True)
+    # Start a new episode.
     obs, info = env.reset()
-    observations.append(obs.tolist())
 
-    while True:
-        timesteps += 1
-        # Perform action inference using the ONNX model.
-        logits = onnx_session.run(
-            output_names,
-            {"onnx::Gemm_0": np.array([obs], np.float32)},
-        )[0][
-            0
-        ]  # [0]=first return item, [0]=batch size 1
+    if test_mode:  # Testing
+        ray_storage = str(Path(RAY_STORAGE).resolve())
+        analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
+        assert analysis.trials is not None, "Analysis trial is None"
+        last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
+        assert last_checkpoint is not None, "Last checkpoint is None"
+        algo = Algorithm.from_checkpoint(last_checkpoint)
+        while True:
+            try:
+                action = algo.compute_single_action(obs, explore=False)
+                assert isinstance(action, np.ndarray), "Action must be a numpy array."
+                obs, reward, terminated, truncated, info = env.step(action)
+                if terminated or truncated:
+                    _, _ = env.reset()
+            except KeyboardInterrupt:
+                break
+    else:  # Training
+        client = PolicyClient(
+            f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
+            inference_mode="local",
+        )
+        eid = client.start_episode(training_enabled=True)
+        while True:
+            try:
+                action = client.get_action(eid, obs)
 
-        # Stochastic sample.
-        assert env.action_space.shape is not None, "Action space is not defined."
-        mean = th.from_numpy(logits[0 : env.action_space.shape[0]])
-        log_std = th.from_numpy(logits[env.action_space.shape[0] :])
-        std = th.exp(log_std)
-        dist = th.distributions.Normal(mean, std)
-        action = dist.sample()
-        logp = dist.log_prob(action)
-        squashed = th.tanh(action)  # Now in [-1, 1]
-        # Scale to [0.1, 1.0]
-        assert isinstance(env.action_space, spaces.Box), "Action space is not Box."
-        low, high = env.action_space.low, env.action_space.high
-        action_scaled = (squashed + 1) / 2 * (high - low) + low
+                assert isinstance(action, np.ndarray), "Action must be a numpy array."
+                obs, reward, terminated, truncated, info = env.step(action)
 
-        # Perform the env step.
-        assert isinstance(action_scaled, th.Tensor), "Action is not a Torch tensor."
-        obs, reward, terminated, truncated, info = env.step(action_scaled.numpy())
+                # Log next-obs, rewards, and infos.
+                client.log_returns(eid, reward, info=info)
 
-        # Collect step data.
-        observations.append(obs.tolist())
-        actions.append(action.tolist())
-        action_dist_inputs.append(logits.tolist())
-        action_logps.append(logp.tolist())
-        rewards.append(reward)
-        episode_return += reward
-
-        # We have to create a new episode record.
-        if timesteps == env_steps_per_sample or terminated or truncated:
-            episodes.append(
-                {
-                    Columns.OBS: observations,
-                    Columns.ACTIONS: actions,
-                    Columns.ACTION_DIST_INPUTS: action_dist_inputs,
-                    Columns.ACTION_LOGP: action_logps,
-                    Columns.REWARDS: rewards,
-                    "is_terminated": terminated,
-                    "is_truncated": truncated,
-                }
-            )
-            # We collected enough samples -> Send them to server.
-            if timesteps == env_steps_per_sample:
-                # Make sure the amount of data we collected is correct.
-                assert sum(len(e["actions"]) for e in episodes) == env_steps_per_sample
-
-                # Send the data to the server.
-                if force_on_policy:
-                    _send_message(
-                        sock_,
-                        {
-                            "type": rllink.EPISODES.name,
-                            "episodes": episodes,
-                            "weights_seq_no": weights_seq_no,
-                        },
-                    )
-                    # We are forced to sample on-policy. Have to wait for a response
-                    # with the state (weights) in it.
-                    _send_message(sock_, {"type": rllink.GET_STATE.name})
-                    msg_type, msg_body = _get_message(sock_)
-                    assert msg_type == rllink.SET_STATE
-                    onnx_session, output_names = _set_state(msg_body)
-
-                # Sampling doesn't have to be on-policy -> continue collecting
-                # samples.
-                else:
-                    raise NotImplementedError
-
-                episodes = []
-                timesteps = 0
-
-            # Set new buckets to empty lists (for next episode).
-            observations = [observations[-1]]
-            actions = []
-            action_dist_inputs = []
-            action_logps = []
-            rewards = []
-
-            # The episode is done -> Reset.
-            if terminated or truncated:
-                obs, _ = env.reset()
-                observations = [obs.tolist()]
-                episode_return = 0.0
+                # Reset the episode if done.
+                if terminated or truncated:
+                    client.end_episode(eid, obs)
+                    obs, info = env.reset()
+                    eid = client.start_episode(training_enabled=True)
+            except KeyboardInterrupt:
+                break
 
 
 def server_rl():
-    ray.init(local_mode=True)
-    ray_storage = "/tmp/ray_storage/"
-    agent_name = "ppo"
-    checkpoint_frequency = 1
-    stop = {
-        "episodes_total": 10,
-    }
+    SERVER_ADDRESS = "localhost"
+    SERVER_BASE_PORT = 9900
+    RAY_STORAGE = "./ray_results/"
+    AGENT_NAME = "oai_ppo"
+    EPISODES_TOTAL = 100000
+    DEBUG_MODE = False
     env = MobNet()
+
+    if __name__ == "__main__":
+        ray_storage = str(Path(RAY_STORAGE).resolve())
+        ray.init(local_mode=DEBUG_MODE)
+
+        def _input(ioctx):
+            if ioctx.worker_index > 0 or ioctx.worker.num_workers == 0:
+                return PolicyServerInput(
+                    ioctx,
+                    SERVER_ADDRESS,
+                    SERVER_BASE_PORT
+                    + ioctx.worker_index
+                    - (1 if ioctx.worker_index > 0 else 0),
+                )
+            else:
+                return None
+
     config = (
-        PPOConfig()
+        get_trainable_cls("PPO")
+        .get_default_config()
         .environment(
             env=None,
             observation_space=env.observation_space,
@@ -253,47 +159,70 @@ def server_rl():
             is_atari=False,
         )
         .framework("torch")
+        .offline_data(input_=_input)
+        .rollouts(
+            num_rollout_workers=0,
+            enable_connectors=False,
+        )
+        .evaluation(off_policy_estimation_methods={})
+        .debugging(log_level="INFO")
         .training(
             lr=0.0003,  # SB3 LR
             train_batch_size=2048,  # SB3 n_steps
-            minibatch_size=64,  # type: ignore SB3 batch_size
-            num_epochs=10,  # type: ignore SB3 n_epochs
+            sgd_minibatch_size=64,  # type: ignore SB3 batch_size
+            num_sgd_iter=10,  # type: ignore SB3 n_epochs
             gamma=0.99,  # SB3 gamma
             lambda_=0.95,  # type: ignore # SB3 gae_lambda
             clip_param=0.2,  # type: ignore SB3 clip_range,
             vf_clip_param=np.inf,  # type: ignore SB3 equivalent to clip_range_vf=None
+            use_gae=True,  # type: ignore SB3 normalize_advantage
             entropy_coeff=0.01,  # type: ignore SB3 ent_coef
             vf_loss_coeff=0.5,  # type: ignore SB3 vf_coef
-            grad_clip=0.5,  # SB3 max_grad_norm
-            use_gae=True,  # type: ignore SB3 normalize_advantage
-            kl_coeff=0,  # type: ignore
-            use_kl_loss=False,  # type: ignore
-            kl_target=0,  # type: ignore
+            grad_clip=0.5,  # SB3 max_grad_norm TODO
+            # kl_target=0.00001,  # SB3 target_kl
         )
-        .env_runners(
-            env_runner_cls=TcpClientInferenceEnvRunner,
-        )
-        .debugging(log_level="INFO")
-        .api_stack(
-            enable_rl_module_and_learner=False,
-            enable_env_runner_and_connector_v2=False,
-        )
+        # .rl_module(_enable_rl_module_api=False)
+        # .experimental(_enable_new_api_stack=False)
     )
-    progress_reporter = CLIReporter(
-        metric_columns=["episode_reward_mean", "training_iteration"]
+
+    config["model"]["fcnet_hiddens"] = [
+        64,
+        64,
+    ]  # Set neural network size
+
+    config.experimental()
+    config.update_from_dict(
+        {
+            "train_batch_size": 1000,
+            # "model": {"use_lstm": args.use_lstm},
+        }
     )
-    tune.Tuner(
-        "PPO",
-        param_space=config,
-        run_config=tune.RunConfig(  # type: ignore
-            storage_path=ray_storage + agent_name,
-            name=agent_name,
-            checkpoint_config=tune.CheckpointConfig(num_to_keep=10),
-            # stop=stop, TODO
-            progress_reporter=progress_reporter,
-        ),
-    ).fit()
-    ray.shutdown()
+
+    stop = {
+        "episodes_total": EPISODES_TOTAL,
+    }
+
+    # Restore the agent training in case of interruption or starts a new training
+    if tune.Tuner.can_restore(f"{ray_storage}/{AGENT_NAME}/"):
+        tuner = tune.Tuner.restore(
+            f"{ray_storage}/{AGENT_NAME}/", trainable=PPO, param_space=config
+        )
+        results = tuner.fit()
+    else:
+        results = tune.Tuner(
+            "PPO",
+            param_space=config,
+            run_config=air.RunConfig(
+                stop=stop,
+                verbose=2,
+                storage_path=ray_storage,
+                name=AGENT_NAME,
+                checkpoint_config=air.CheckpointConfig(
+                    checkpoint_frequency=1,
+                    checkpoint_at_end=True,
+                ),
+            ),
+        ).fit()
 
 
 # Example usage
@@ -304,19 +233,24 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument(
+        "--test",
+        action="store_true",
+    )
+    parser.add_argument(
         "--server",
         action="store_true",
     )
     args = parser.parse_args()
     if args.client:
-        client_rl()
+        client_rl(test_mode=args.test)
     elif args.server:
         server_rl()
     else:
-        # server_thread = threading.Thread(target=server_rl)
-        # server_thread.start()
-        # client_rl()
+        server_thread = threading.Thread(target=server_rl)
+        server_thread.start()
+        sleep(10)
+        client_rl()
         # Reverse
-        client_thread = threading.Thread(target=client_rl)
-        client_thread.start()
-        server_rl()
+        # client_thread = threading.Thread(target=client_rl)
+        # client_thread.start()
+        # server_rl()
