@@ -474,6 +474,9 @@ maxnoofUEs			    INTEGER ::= 65535
 
 maxnoofPMMeasurements		    INTEGER ::= 2147483647
 
+maxnoofRRMPolicyRatioGroups INTEGER ::= 65535
+maxnoofRRMPolicyMembers     INTEGER ::= 65535
+
 NI-Type ::= ENUMERATED{
     x2-u,
     xn-u,
@@ -546,7 +549,7 @@ E2SM-RC-ControlHeader-Format1 ::= SEQUENCE{
 	ueId			UE-Identity,
 	ric-ControlStyle-Type	RIC-Style-Type,
 	ric-ControlAction-ID	RIC-ControlAction-ID,
-	slicePRBQuota 		    SlicePRBQuota OPTIONAL,
+	rrmPolicyList  		    RRMPolicyRatioList OPTIONAL,
 	...
 }
 
@@ -561,12 +564,22 @@ E2SM-RC-ControlMessage ::= CHOICE{
 	...
 }
 
-SlicePRBQuota ::= SEQUENCE {
-	sliceID		S-NSSAI,
-	minPRBRatio   INTEGER (0..100), -- Min Ratio PRB Quota
-	maxPRBRatio   INTEGER (0..100), -- Max Ratio PRB Quota
-	dedicatePRBRatio INTEGER (0..100),  -- Dedicated PRB Quota
-	...
+RRMPolicyRatioList ::= SEQUENCE (SIZE (1..maxnoofRRMPolicyRatioGroups)) OF RRMPolicyRatioGroup
+
+RRMPolicyRatioGroup ::= SEQUENCE {
+    rrmPolicy                 RRMPolicy,
+    minPRBPolicyRatio         INTEGER (0..100) OPTIONAL,
+    maxPRBPolicyRatio         INTEGER (0..100) OPTIONAL,
+    dedicatedPRBPolicyRatio   INTEGER (0..100) OPTIONAL
+}
+
+RRMPolicy ::= SEQUENCE {
+    rrmPolicyMemberList       SEQUENCE (SIZE (1..maxnoofRRMPolicyMembers)) OF RRMPolicyMember
+}
+
+RRMPolicyMember ::= SEQUENCE {
+    plmnIdentity              OCTET STRING (SIZE(3)) OPTIONAL,  -- MCC+MNC
+    sNSSAI                    S-NSSAI OPTIONAL
 }
 
 -- E2SM-RC-ControlMessage Format 1
