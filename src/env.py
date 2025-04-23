@@ -134,22 +134,20 @@ def server_rl():
     EPISODES_TOTAL = 100000
     DEBUG_MODE = False
     env = MobNet()
+    ray_storage = str(Path(RAY_STORAGE).resolve())
+    ray.init(local_mode=DEBUG_MODE)
 
-    if __name__ == "__main__":
-        ray_storage = str(Path(RAY_STORAGE).resolve())
-        ray.init(local_mode=DEBUG_MODE)
-
-        def _input(ioctx):
-            if ioctx.worker_index > 0 or ioctx.worker.num_workers == 0:
-                return PolicyServerInput(
-                    ioctx,
-                    SERVER_ADDRESS,
-                    SERVER_BASE_PORT
-                    + ioctx.worker_index
-                    - (1 if ioctx.worker_index > 0 else 0),
-                )
-            else:
-                return None
+    def _input(ioctx):
+        if ioctx.worker_index > 0 or ioctx.worker.num_workers == 0:
+            return PolicyServerInput(
+                ioctx,
+                SERVER_ADDRESS,
+                SERVER_BASE_PORT
+                + ioctx.worker_index
+                - (1 if ioctx.worker_index > 0 else 0),
+            )
+        else:
+            return None
 
     config = (
         get_trainable_cls("PPO")

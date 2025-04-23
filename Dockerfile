@@ -56,11 +56,12 @@ RUN touch /ric-plt-xapp-frame-py/ricxappframe/entities/__init__.py && touch /ric
 RUN pip install /ric-plt-xapp-frame-py/
 
 # Install
+COPY src/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
 COPY setup.py /tmp
 COPY src/ /tmp/src
 COPY init/ /tmp/init
 RUN pip install /tmp
-RUN pip install -r /tmp/src/requirements.txt
 
 ENV PYTHONUNBUFFERED=1
 
