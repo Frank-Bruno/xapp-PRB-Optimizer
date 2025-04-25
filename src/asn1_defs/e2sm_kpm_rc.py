@@ -158,6 +158,8 @@ class E2SM_KPM_RC:
         'maxPLMN',
         'maxnoofUEs',
         'maxnoofPMMeasurements',
+        'maxnoofRRMPolicyRatioGroups',
+        'maxnoofRRMPolicyMembers',
         'NI-Type',
         'RAN-Container',
         'E2SM-RC-RANFunctionDefinition',
@@ -169,7 +171,10 @@ class E2SM_KPM_RC:
         'E2SM-RC-ControlHeader',
         'E2SM-RC-ControlHeader-Format1',
         'E2SM-RC-ControlMessage',
-        'SlicePRBQuota',
+        'RRMPolicyRatioList',
+        'RRMPolicyRatioGroup',
+        'RRMPolicy',
+        'RRMPolicyMember',
         'E2SM-RC-ControlMessage-Format1',
         'RANParameter-Item',
         'RANParameter-ValueType',
@@ -299,7 +304,10 @@ class E2SM_KPM_RC:
         'E2SM-RC-ControlHeader',
         'E2SM-RC-ControlHeader-Format1',
         'E2SM-RC-ControlMessage',
-        'SlicePRBQuota',
+        'RRMPolicyRatioList',
+        'RRMPolicyRatioGroup',
+        'RRMPolicy',
+        'RRMPolicyMember',
         'E2SM-RC-ControlMessage-Format1',
         'RANParameter-Item',
         'RANParameter-ValueType',
@@ -403,6 +411,8 @@ class E2SM_KPM_RC:
         'maxPLMN',
         'maxnoofUEs',
         'maxnoofPMMeasurements',
+        'maxnoofRRMPolicyRatioGroups',
+        'maxnoofRRMPolicyMembers',
         'maxnoofRICStyles',
         'maxnoofAssociatedRANInfo',
         'maxnoofParametersInStructure',
@@ -1370,6 +1380,14 @@ class E2SM_KPM_RC:
     maxnoofPMMeasurements = INT(name='maxnoofPMMeasurements', mode=MODE_VALUE)
     maxnoofPMMeasurements._val = 2147483647
     
+    #-----< maxnoofRRMPolicyRatioGroups >-----#
+    maxnoofRRMPolicyRatioGroups = INT(name='maxnoofRRMPolicyRatioGroups', mode=MODE_VALUE)
+    maxnoofRRMPolicyRatioGroups._val = 65535
+    
+    #-----< maxnoofRRMPolicyMembers >-----#
+    maxnoofRRMPolicyMembers = INT(name='maxnoofRRMPolicyMembers', mode=MODE_VALUE)
+    maxnoofRRMPolicyMembers._val = 65535
+    
     #-----< NI-Type >-----#
     NI_Type = ENUM(name='NI-Type', mode=MODE_TYPE)
     NI_Type._cont = ASN1Dict([('x2-u', 0), ('xn-u', 1), ('f1-u', 2)])
@@ -1482,12 +1500,12 @@ class E2SM_KPM_RC:
     _E2SM_RC_ControlHeader_Format1_ueId = OCT_STR(name='ueId', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'UE-Identity')))
     _E2SM_RC_ControlHeader_Format1_ric_ControlStyle_Type = INT(name='ric-ControlStyle-Type', mode=MODE_TYPE, tag=(1, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'RIC-Style-Type')))
     _E2SM_RC_ControlHeader_Format1_ric_ControlAction_ID = INT(name='ric-ControlAction-ID', mode=MODE_TYPE, tag=(2, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'RIC-ControlAction-ID')))
-    _E2SM_RC_ControlHeader_Format1_slicePRBQuota = SEQ(name='slicePRBQuota', mode=MODE_TYPE, tag=(3, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'SlicePRBQuota')), opt=True)
+    _E2SM_RC_ControlHeader_Format1_rrmPolicyList = SEQ_OF(name='rrmPolicyList', mode=MODE_TYPE, tag=(3, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'RRMPolicyRatioList')), opt=True)
     E2SM_RC_ControlHeader_Format1._cont = ASN1Dict([
         ('ueId', _E2SM_RC_ControlHeader_Format1_ueId),
         ('ric-ControlStyle-Type', _E2SM_RC_ControlHeader_Format1_ric_ControlStyle_Type),
         ('ric-ControlAction-ID', _E2SM_RC_ControlHeader_Format1_ric_ControlAction_ID),
-        ('slicePRBQuota', _E2SM_RC_ControlHeader_Format1_slicePRBQuota),
+        ('rrmPolicyList', _E2SM_RC_ControlHeader_Format1_rrmPolicyList),
         ])
     E2SM_RC_ControlHeader_Format1._ext = []
     
@@ -1499,22 +1517,50 @@ class E2SM_KPM_RC:
         ])
     E2SM_RC_ControlMessage._ext = []
     
-    #-----< SlicePRBQuota >-----#
-    SlicePRBQuota = SEQ(name='SlicePRBQuota', mode=MODE_TYPE)
-    _SlicePRBQuota_sliceID = SEQ(name='sliceID', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'S-NSSAI')))
-    _SlicePRBQuota_minPRBRatio = INT(name='minPRBRatio', mode=MODE_TYPE, tag=(1, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
-    _SlicePRBQuota_minPRBRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
-    _SlicePRBQuota_maxPRBRatio = INT(name='maxPRBRatio', mode=MODE_TYPE, tag=(2, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
-    _SlicePRBQuota_maxPRBRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
-    _SlicePRBQuota_dedicatePRBRatio = INT(name='dedicatePRBRatio', mode=MODE_TYPE, tag=(3, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
-    _SlicePRBQuota_dedicatePRBRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
-    SlicePRBQuota._cont = ASN1Dict([
-        ('sliceID', _SlicePRBQuota_sliceID),
-        ('minPRBRatio', _SlicePRBQuota_minPRBRatio),
-        ('maxPRBRatio', _SlicePRBQuota_maxPRBRatio),
-        ('dedicatePRBRatio', _SlicePRBQuota_dedicatePRBRatio),
+    #-----< RRMPolicyRatioList >-----#
+    RRMPolicyRatioList = SEQ_OF(name='RRMPolicyRatioList', mode=MODE_TYPE)
+    _RRMPolicyRatioList__item_ = SEQ(name='_item_', mode=MODE_TYPE, typeref=ASN1RefType(('E2SM-KPM-RC', 'RRMPolicyRatioGroup')))
+    RRMPolicyRatioList._cont = _RRMPolicyRatioList__item_
+    RRMPolicyRatioList._const_sz = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=1, ub=65535)], ev=None, er=[])
+    
+    #-----< RRMPolicyRatioGroup >-----#
+    RRMPolicyRatioGroup = SEQ(name='RRMPolicyRatioGroup', mode=MODE_TYPE)
+    _RRMPolicyRatioGroup_rrmPolicy = SEQ(name='rrmPolicy', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'RRMPolicy')))
+    _RRMPolicyRatioGroup_minPRBPolicyRatio = INT(name='minPRBPolicyRatio', mode=MODE_TYPE, tag=(1, TAG_CONTEXT_SPEC, TAG_IMPLICIT), opt=True)
+    _RRMPolicyRatioGroup_minPRBPolicyRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
+    _RRMPolicyRatioGroup_maxPRBPolicyRatio = INT(name='maxPRBPolicyRatio', mode=MODE_TYPE, tag=(2, TAG_CONTEXT_SPEC, TAG_IMPLICIT), opt=True)
+    _RRMPolicyRatioGroup_maxPRBPolicyRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
+    _RRMPolicyRatioGroup_dedicatedPRBPolicyRatio = INT(name='dedicatedPRBPolicyRatio', mode=MODE_TYPE, tag=(3, TAG_CONTEXT_SPEC, TAG_IMPLICIT), opt=True)
+    _RRMPolicyRatioGroup_dedicatedPRBPolicyRatio._const_val = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=0, ub=100)], ev=None, er=[])
+    RRMPolicyRatioGroup._cont = ASN1Dict([
+        ('rrmPolicy', _RRMPolicyRatioGroup_rrmPolicy),
+        ('minPRBPolicyRatio', _RRMPolicyRatioGroup_minPRBPolicyRatio),
+        ('maxPRBPolicyRatio', _RRMPolicyRatioGroup_maxPRBPolicyRatio),
+        ('dedicatedPRBPolicyRatio', _RRMPolicyRatioGroup_dedicatedPRBPolicyRatio),
         ])
-    SlicePRBQuota._ext = []
+    RRMPolicyRatioGroup._ext = None
+    
+    #-----< RRMPolicy >-----#
+    RRMPolicy = SEQ(name='RRMPolicy', mode=MODE_TYPE)
+    _RRMPolicy_rrmPolicyMemberList = SEQ_OF(name='rrmPolicyMemberList', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT))
+    __RRMPolicy_rrmPolicyMemberList__item_ = SEQ(name='_item_', mode=MODE_TYPE, typeref=ASN1RefType(('E2SM-KPM-RC', 'RRMPolicyMember')))
+    _RRMPolicy_rrmPolicyMemberList._cont = __RRMPolicy_rrmPolicyMemberList__item_
+    _RRMPolicy_rrmPolicyMemberList._const_sz = ASN1Set(rv=[], rr=[ASN1RangeInt(lb=1, ub=65535)], ev=None, er=[])
+    RRMPolicy._cont = ASN1Dict([
+        ('rrmPolicyMemberList', _RRMPolicy_rrmPolicyMemberList),
+        ])
+    RRMPolicy._ext = None
+    
+    #-----< RRMPolicyMember >-----#
+    RRMPolicyMember = SEQ(name='RRMPolicyMember', mode=MODE_TYPE)
+    _RRMPolicyMember_plmnIdentity = OCT_STR(name='plmnIdentity', mode=MODE_TYPE, tag=(0, TAG_CONTEXT_SPEC, TAG_IMPLICIT), opt=True)
+    _RRMPolicyMember_plmnIdentity._const_sz = ASN1Set(rv=[3], rr=[], ev=None, er=[])
+    _RRMPolicyMember_sNSSAI = SEQ(name='sNSSAI', mode=MODE_TYPE, tag=(1, TAG_CONTEXT_SPEC, TAG_IMPLICIT), typeref=ASN1RefType(('E2SM-KPM-RC', 'S-NSSAI')), opt=True)
+    RRMPolicyMember._cont = ASN1Dict([
+        ('plmnIdentity', _RRMPolicyMember_plmnIdentity),
+        ('sNSSAI', _RRMPolicyMember_sNSSAI),
+        ])
+    RRMPolicyMember._ext = None
     
     #-----< E2SM-RC-ControlMessage-Format1 >-----#
     E2SM_RC_ControlMessage_Format1 = SEQ(name='E2SM-RC-ControlMessage-Format1', mode=MODE_TYPE)
@@ -2100,6 +2146,8 @@ class E2SM_KPM_RC:
         maxPLMN,
         maxnoofUEs,
         maxnoofPMMeasurements,
+        maxnoofRRMPolicyRatioGroups,
+        maxnoofRRMPolicyMembers,
         NI_Type,
         RAN_Container,
         _E2SM_RC_RANFunctionDefinition_ranFunction_Name,
@@ -2137,15 +2185,23 @@ class E2SM_KPM_RC:
         _E2SM_RC_ControlHeader_Format1_ueId,
         _E2SM_RC_ControlHeader_Format1_ric_ControlStyle_Type,
         _E2SM_RC_ControlHeader_Format1_ric_ControlAction_ID,
-        _E2SM_RC_ControlHeader_Format1_slicePRBQuota,
+        _E2SM_RC_ControlHeader_Format1_rrmPolicyList,
         E2SM_RC_ControlHeader_Format1,
         _E2SM_RC_ControlMessage_controlMessage_Format1,
         E2SM_RC_ControlMessage,
-        _SlicePRBQuota_sliceID,
-        _SlicePRBQuota_minPRBRatio,
-        _SlicePRBQuota_maxPRBRatio,
-        _SlicePRBQuota_dedicatePRBRatio,
-        SlicePRBQuota,
+        _RRMPolicyRatioList__item_,
+        RRMPolicyRatioList,
+        _RRMPolicyRatioGroup_rrmPolicy,
+        _RRMPolicyRatioGroup_minPRBPolicyRatio,
+        _RRMPolicyRatioGroup_maxPRBPolicyRatio,
+        _RRMPolicyRatioGroup_dedicatedPRBPolicyRatio,
+        RRMPolicyRatioGroup,
+        __RRMPolicy_rrmPolicyMemberList__item_,
+        _RRMPolicy_rrmPolicyMemberList,
+        RRMPolicy,
+        _RRMPolicyMember_plmnIdentity,
+        _RRMPolicyMember_sNSSAI,
+        RRMPolicyMember,
         __E2SM_RC_ControlMessage_Format1_ranParameters_List__item_,
         _E2SM_RC_ControlMessage_Format1_ranParameters_List,
         E2SM_RC_ControlMessage_Format1,

@@ -3,7 +3,51 @@ from asn1_defs.e2ap_2_3 import E2AP_PDU_Descriptions
 
 # Encoding RIC Control Header
 asn1_control_header = E2SM_KPM_RC.E2SM_RC_ControlHeader
-ric_control_header = ('controlHeader-Format1', {"ueId":b'\x00\x01', "ric-ControlStyle-Type": 1, "ric-ControlAction-ID": 1, "slicePRBQuota": {"sliceID": {"sST": b'\x00', "sD": b'\x00\x01\x03'}, "dedicatePRBRatio": 20, "minPRBRatio": 40, "maxPRBRatio":80}})
+ric_control_header = ('controlHeader-Format1', {
+	"ueId":b'\x00\x01', 
+	"ric-ControlStyle-Type": 1, 
+	"ric-ControlAction-ID": 1, 
+	"rrmPolicyList": [
+		{
+			"rrmPolicy": 
+   			{
+				"rrmPolicyMemberList": 
+					[
+						{
+							"plmnIdentity": b'\x00\x01\x02',
+							"sNSSAI": {
+								"sST": b'\x00',
+								"sD": b'\x00\x01\x03'
+							}
+						}
+					]
+			},
+			"dedicatedPRBPolicyRatio": 20,
+			"minPRBPolicyRatio": 40,
+			"maxPRBPolicyRatio": 80,
+		},
+		{
+			"rrmPolicy": 
+   			{
+				"rrmPolicyMemberList": 
+					[
+						{
+							"plmnIdentity": b'\x00\x01\x02',
+							"sNSSAI": {
+								"sST": b'\x00',
+								"sD": b'\x00\x01\x04'
+							}
+						}
+					]
+			},
+			"dedicatedPRBPolicyRatio": 20,
+			"minPRBPolicyRatio": 50,
+			"maxPRBPolicyRatio": 80,
+		},
+	]
+}
+)
+												
 asn1_control_header.set_val(ric_control_header)
 coded_control_header = asn1_control_header.to_aper()
 

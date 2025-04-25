@@ -65,28 +65,7 @@ class XappNori:
         self.env = MobNet()
         self.env_thread = Thread(target=server_rl, daemon=True)
         self.env_thread.start()
-        sleep(10)  # RL server needs to be started first than the RL client
 
-        # RL Client
-        SERVER_ADDRESS = "localhost"
-        RAY_STORAGE = "./ray_results/"
-        AGENT_NAME = "ppo"
-        SERVER_BASE_PORT = 9900
-        self.test_mode = False
-        self.env.reset()
-        if self.test_mode:  # Testing
-            ray_storage = str(Path(RAY_STORAGE).resolve())
-            analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
-            assert analysis.trials is not None, "Analysis trial is None"
-            last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
-            assert last_checkpoint is not None, "Last checkpoint is None"
-            self.algo = Algorithm.from_checkpoint(last_checkpoint)
-        else:  # Training
-            self.client = PolicyClient(
-                f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
-                inference_mode="local",
-            )
-            self.eid = self.client.start_episode(training_enabled=True)
 
         # Registering RMR message handlers
         self._rmrxapp.register_callback(
@@ -141,6 +120,28 @@ class XappNori:
         # xApp is ready to start
         self._ready = True
         self.logger.info("xApp is ready.")
+
+        # RL Client
+        sleep(10)
+        SERVER_ADDRESS = "localhost"
+        RAY_STORAGE = "./ray_results/"
+        AGENT_NAME = "ppo"
+        SERVER_BASE_PORT = 9900
+        self.test_mode = False
+        self.env.reset()
+        if self.test_mode:  # Testing
+            ray_storage = str(Path(RAY_STORAGE).resolve())
+            analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
+            assert analysis.trials is not None, "Analysis trial is None"
+            last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
+            assert last_checkpoint is not None, "Last checkpoint is None"
+            self.algo = Algorithm.from_checkpoint(last_checkpoint)
+        else:  # Training
+            self.client = PolicyClient(
+                f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
+                inference_mode="local",
+            )
+            self.eid = self.client.start_episode(training_enabled=True)
 
     # ------------------ START AND STOP
 
@@ -415,11 +416,12 @@ class XappNori:
         }
 
         # self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
-        # self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
+        self.logger.info(f"Decoded RIC indication header: {ric_indication_data}")
+        self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
 
         ########### Interaction with RL Environment
         # Observation
-        slice_1_avg_thr = 4
+        slice_1_avg_thr = 4 # TODO obtain the throughput information from the RIC indication message
         slice_2_avg_thr = 20
         obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
 
@@ -431,7 +433,6 @@ class XappNori:
         perc_action = np.floor((action / np.sum(action)) * 100)
         self.env.set_obs(obs)
         self.obs, reward, terminated, truncated, info = self.env.step(action)
-        print("Action: ", perc_action)
         if not self.test_mode:  # Training
             self.client.log_returns(self.eid, reward, info=info)
         if terminated or truncated:
@@ -445,41 +446,53 @@ class XappNori:
         for slice_id in range(2):
             sst = b"\x01" if slice_id == 1 else b"\x00"
             sd = b"\x00\x00\x00"
-            self.send_ran_slicing_control(
-                sst, sd, perc_action[slice_id], rmrxapp, summary, sbuf
-            )
+        slices_id = [
+            {"sST": b"\x00", "sD": b"\x00\x00\x00"},
+            {"sST": b"\x01", "sD": b"\x00\x00\x00"},]
+        
+        self.send_ran_slicing_control(
+            slices_id, perc_action, rmrxapp, summary, sbuf
+        )
 
         rmrxapp.rmr_free(sbuf)
 
     # ------------------ HTTP HANDLERS
 
     def send_ran_slicing_control(
-        self, sst: bytes, sd: bytes, action: int, rmrxapp: RMRXapp, summary: dict, sbuf
+        self, slices_id: dict, action: np.ndarray, rmrxapp: RMRXapp, summary: dict, sbuf
     ):
         """
         Sends a RAN slicing control message to the RIC.
         """
 
-        dedicated = action
-        maximum = 100
-        minimum = action
         ####### Creating RIC Control Request to control PRB slice quota
         # Encoding RIC Control Header
         asn1_control_header = E2SM_KPM_RC.E2SM_RC_ControlHeader
-        # ric_control_header = ('controlHeader-Format1', {"ueId":b'\x00\x01', "ric-ControlStyle-Type": 1, "ric-ControlAction-ID": 1, "slicePRBQuota": {"sliceID": {"sST": b'\x00', "sD": b'\x00\x01\x03'}, "dedicatePRBRatio": 20, "minPRBRatio": 40, "maxPRBRatio":80}})
-        ric_control_header = (
-            "controlHeader-Format1",
-            {
-                "ueId": b"\x00\x01",
-                "ric-ControlStyle-Type": 1,
-                "ric-ControlAction-ID": 1,
-                "slicePRBQuota": {
-                    "sliceID": {"sST": sst, "sD": sd},
-                    "dedicatePRBRatio": int(dedicated),
-                    "minPRBRatio": int(minimum),
-                    "maxPRBRatio": int(maximum),
+        rrm_policy_list = []
+        for slice_id, rb_alloc in zip(slices_id, action):
+            rrm_policy = {
+                "rrmPolicy": {
+                    "rrmPolicyMemberList": [
+                        {
+                            "plmnIdentity": b"\x00\x01\x02",
+                            "sNSSAI": {
+                                "sST": slice_id["sST"],
+                                "sD": slice_id["sD"],
+                            },
+                        }
+                    ]
                 },
-            },
+                "dedicatedPRBPolicyRatio": int(rb_alloc),
+                "minPRBPolicyRatio": int(rb_alloc),
+                "maxPRBPolicyRatio": 100,
+            }
+            rrm_policy_list.append(rrm_policy)
+        ric_control_header = ('controlHeader-Format1', {
+            "ueId":b'\x00\x01', 
+            "ric-ControlStyle-Type": 1, 
+            "ric-ControlAction-ID": 1, 
+            "rrmPolicyList": rrm_policy_list,
+        }
         )
 
         asn1_control_header.set_val(ric_control_header)
@@ -537,15 +550,16 @@ class XappNori:
             sbuf, new_payload=coded_pdu, new_mtype=12040
         )  # 12040 = RIC Control Request
 
-        # Decoding RIC Control Request
-        asn1_pdu.from_aper(coded_pdu)
-        decoded_pdu = asn1_pdu.get_val()
+        # # Decoding RIC Control Request
+        # asn1_pdu.from_aper(coded_pdu)
+        # decoded_pdu = asn1_pdu.get_val()
         # self.logger.info(f"\n\n\n################\nDecoded PDU: {decoded_pdu}")
 
-        # Decoding RIC Control Header
-        coded_control = decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1]
-        asn1_control_header.from_aper(coded_control)
-        decoded_control = asn1_control_header.get_val()
+        # # Decoding RIC Control Header
+        # assert decoded_pdu is not None, "Decoded PDU is None"
+        # coded_control = decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1]
+        # asn1_control_header.from_aper(coded_control)
+        # decoded_control = asn1_control_header.get_val()
         # self.logger.info(f"\n\n\n################\nDecoded Control Header: {decoded_control}")
 
     def resubscribe_handler(self, name: str, path: str, data: bytes, ctype: str):
