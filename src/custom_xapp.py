@@ -416,7 +416,8 @@ class XappNori:
         }
 
         # self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
-        # self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
+        self.logger.info(f"Decoded RIC indication header: {ric_indication_data}")
+        self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
 
         ########### Interaction with RL Environment
         # Observation
@@ -432,7 +433,6 @@ class XappNori:
         perc_action = np.floor((action / np.sum(action)) * 100)
         self.env.set_obs(obs)
         self.obs, reward, terminated, truncated, info = self.env.step(action)
-        print("Action: ", perc_action)
         if not self.test_mode:  # Training
             self.client.log_returns(self.eid, reward, info=info)
         if terminated or truncated:
@@ -482,8 +482,8 @@ class XappNori:
                         }
                     ]
                 },
-                "dedicatedPRBPolicyRatio": action,
-                "minPRBPolicyRatio": action,
+                "dedicatedPRBPolicyRatio": int(rb_alloc),
+                "minPRBPolicyRatio": int(rb_alloc),
                 "maxPRBPolicyRatio": 100,
             }
             rrm_policy_list.append(rrm_policy)
@@ -550,17 +550,17 @@ class XappNori:
             sbuf, new_payload=coded_pdu, new_mtype=12040
         )  # 12040 = RIC Control Request
 
-        # Decoding RIC Control Request
-        asn1_pdu.from_aper(coded_pdu)
-        decoded_pdu = asn1_pdu.get_val()
-        self.logger.info(f"\n\n\n################\nDecoded PDU: {decoded_pdu}")
+        # # Decoding RIC Control Request
+        # asn1_pdu.from_aper(coded_pdu)
+        # decoded_pdu = asn1_pdu.get_val()
+        # self.logger.info(f"\n\n\n################\nDecoded PDU: {decoded_pdu}")
 
-        # Decoding RIC Control Header
-        assert decoded_pdu is not None, "Decoded PDU is None"
-        coded_control = decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1]
-        asn1_control_header.from_aper(coded_control)
-        decoded_control = asn1_control_header.get_val()
-        self.logger.info(f"\n\n\n################\nDecoded Control Header: {decoded_control}")
+        # # Decoding RIC Control Header
+        # assert decoded_pdu is not None, "Decoded PDU is None"
+        # coded_control = decoded_pdu[1]["value"][1]["protocolIEs"][3]["value"][1]
+        # asn1_control_header.from_aper(coded_control)
+        # decoded_control = asn1_control_header.get_val()
+        # self.logger.info(f"\n\n\n################\nDecoded Control Header: {decoded_control}")
 
     def resubscribe_handler(self, name: str, path: str, data: bytes, ctype: str):
         """
