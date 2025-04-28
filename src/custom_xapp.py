@@ -19,6 +19,8 @@ from typing import Dict
 from .env import MobNet, server_rl
 import csv
 from pathlib import Path
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+import datetime
 from ray import tune
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.env.policy_client import PolicyClient
@@ -121,6 +123,14 @@ class XappNori:
         self._ready = True
         self.logger.info("xApp is ready.")
 
+        # InfluxDB client
+        url = "http://200.239.93.110:30086"  # URL of your InfluxDB instance
+        token = "admin"  # your InfluxDB token
+        org = "openranbr"  # your InfluxDB organization name
+        self.bucket = "openranbr"  # your InfluxDB bucket name
+        self.client = InfluxDBClient(url=url, token=token, org=org)
+        self.write_api = self.client.write_api()
+        
         # RL Client
         sleep(10)
         SERVER_ADDRESS = "localhost"
@@ -415,9 +425,10 @@ class XappNori:
             "indicationMessage": decoded_ric_indication_message,
         }
 
-        # self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
-        self.logger.info(f"Decoded RIC indication header: {ric_indication_data}")
-        self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
+        self.logger.info(f"\n\n\n\nDecoded RIC indication data: {ric_indication_data}\n#################\n\n\n\n")
+
+        # Send information to InfluxDB
+        self.send_influxdb_data(ric_indication_data)
 
         ########### Interaction with RL Environment
         # Observation
@@ -457,6 +468,63 @@ class XappNori:
         rmrxapp.rmr_free(sbuf)
 
     # ------------------ HTTP HANDLERS
+
+    def send_influxdb_data(self, data:dict):
+        points = []
+
+        # Common tags
+        collection_start_time = datetime.datetime.now(datetime.timezone.utc) 
+
+        # Extract cellObjectID
+        cell_object_id = data['indicationMessage'][1]['cellObjectID']
+
+        # Cell-level PM info
+        if 'list-of-PM-Information' in data['indicationMessage'][1]:
+            for pm_info in data['indicationMessage'][1]['list-of-PM-Information']:
+                pm_type = pm_info['pmType'][1]
+                pm_val_type, pm_val = pm_info['pmVal']
+
+                # Create a Point
+                p = Point("cell_metrics") \
+                    .tag("cellObjectID", cell_object_id) \
+                    .field(pm_type, pm_val) \
+                    .time(collection_start_time, WritePrecision.NS)
+
+                points.append(p)
+
+        # UE-level PM info
+        if 'list-of-matched-UEs' in data['indicationMessage'][1]:
+            for ue in data['indicationMessage'][1]['list-of-matched-UEs']:
+                ue_id = ue['ueId'].decode()  # ueId is a byte string
+
+                for pm_info in ue['list-of-PM-Information']:
+                    pm_type = pm_info['pmType'][1]
+                    pm_val_type, pm_val = pm_info['pmVal']
+
+                    # Handle valueReal tuple if needed
+                    if pm_val_type == 'valueReal':
+                        # pm_val is like (0, 2, 0), just an example - you might need to parse properly
+                        real_value = pm_val[0] + pm_val[1] * 10**(-pm_val[2])
+                    elif isinstance(pm_val,dict) and 'servingCellMeasurements' in pm_val:
+                        # Extract the SINR value from the nested structure
+                        sinr_value = pm_val['servingCellMeasurements'][1][0]['measResultServingCell']['measResult']['cellResults']['resultsSSB-Cell']['sinr']
+                        real_value = sinr_value
+                    elif isinstance(pm_val, dict):
+                        real_value = None
+                    else:
+                        real_value = pm_val
+
+                    if real_value is not None:
+                        # Create a Point
+                        p = Point("ue_metrics") \
+                            .tag("cellObjectID", cell_object_id) \
+                            .tag("ueId", ue_id) \
+                            .field(pm_type, real_value) \
+                            .time(collection_start_time, WritePrecision.NS)
+
+                        points.append(p)
+        self.write_api.write(bucket=self.bucket, record=points)
+        self.logger.info(f"Data sent to InfluxDB: {len(points)} points")
 
     def send_ran_slicing_control(
         self, slices_id: dict, action: np.ndarray, rmrxapp: RMRXapp, summary: dict, sbuf
