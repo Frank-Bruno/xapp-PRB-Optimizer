@@ -36,6 +36,8 @@ class XappNori:
         Initializes the custom xApp instance and instatiates the xApp framework object.
         """
 
+        self.enable_ran_slicing = True # If false it only executes KPM without RC
+
         # Initializing a logger for the custom xApp instance in Debug level (logs everything)
         self.logger = Logger(
             name="XappNori", level=Level.DEBUG
@@ -64,9 +66,10 @@ class XappNori:
         )
 
         # RL Server
-        self.env = MobNet()
-        self.env_thread = Thread(target=server_rl, daemon=True)
-        self.env_thread.start()
+        if self.enable_ran_slicing:
+            self.env = MobNet()
+            self.env_thread = Thread(target=server_rl, daemon=True)
+            self.env_thread.start()
 
 
         # Registering RMR message handlers
@@ -131,27 +134,28 @@ class XappNori:
         self.client = InfluxDBClient(url=url, token=token, org=org)
         self.write_api = self.client.write_api()
         
-        # RL Client
-        sleep(10)
-        SERVER_ADDRESS = "localhost"
-        RAY_STORAGE = "./ray_results/"
-        AGENT_NAME = "ppo"
-        SERVER_BASE_PORT = 9900
-        self.test_mode = False
-        self.env.reset()
-        if self.test_mode:  # Testing
-            ray_storage = str(Path(RAY_STORAGE).resolve())
-            analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
-            assert analysis.trials is not None, "Analysis trial is None"
-            last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
-            assert last_checkpoint is not None, "Last checkpoint is None"
-            self.algo = Algorithm.from_checkpoint(last_checkpoint)
-        else:  # Training
-            self.client = PolicyClient(
-                f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
-                inference_mode="local",
-            )
-            self.eid = self.client.start_episode(training_enabled=True)
+        if self.enable_ran_slicing:
+            # RL Client
+            sleep(10)
+            SERVER_ADDRESS = "localhost"
+            RAY_STORAGE = "./ray_results/"
+            AGENT_NAME = "ppo"
+            SERVER_BASE_PORT = 9900
+            self.test_mode = False
+            self.env.reset()
+            if self.test_mode:  # Testing
+                ray_storage = str(Path(RAY_STORAGE).resolve())
+                analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
+                assert analysis.trials is not None, "Analysis trial is None"
+                last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
+                assert last_checkpoint is not None, "Last checkpoint is None"
+                self.algo = Algorithm.from_checkpoint(last_checkpoint)
+            else:  # Training
+                self.client = PolicyClient(
+                    f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
+                    inference_mode="local",
+                )
+                self.eid = self.client.start_episode(training_enabled=True)
 
     # ------------------ START AND STOP
 
@@ -430,40 +434,41 @@ class XappNori:
         # Send information to InfluxDB
         self.send_influxdb_data(ric_indication_data)
 
-        ########### Interaction with RL Environment
-        # Observation
-        slice_1_avg_thr = 4 # TODO obtain the throughput information from the RIC indication message
-        slice_2_avg_thr = 20
-        obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
+        if self.enable_ran_slicing:
+            ########### Interaction with RL Environment
+            # Observation
+            slice_1_avg_thr = 4 # TODO obtain the throughput information from the RIC indication message
+            slice_2_avg_thr = 20
+            obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
 
-        if self.test_mode:  # Testing
-            action = self.algo.compute_single_action(obs, explore=False)
-        else:  # Training
-            action = self.client.get_action(self.eid, obs)
-        assert isinstance(action, np.ndarray), "Action must be a numpy array."
-        perc_action = np.floor((action / np.sum(action)) * 100)
-        self.env.set_obs(obs)
-        self.obs, reward, terminated, truncated, info = self.env.step(action)
-        if not self.test_mode:  # Training
-            self.client.log_returns(self.eid, reward, info=info)
-        if terminated or truncated:
-            obs, info = self.env.reset()
+            if self.test_mode:  # Testing
+                action = self.algo.compute_single_action(obs, explore=False)
+            else:  # Training
+                action = self.client.get_action(self.eid, obs)
+            assert isinstance(action, np.ndarray), "Action must be a numpy array."
+            perc_action = np.floor((action / np.sum(action)) * 100)
+            self.env.set_obs(obs)
+            self.obs, reward, terminated, truncated, info = self.env.step(action)
             if not self.test_mode:  # Training
-                self.client.end_episode(self.eid, obs)
-                self.eid = self.client.start_episode(training_enabled=True)
-        ###################################
+                self.client.log_returns(self.eid, reward, info=info)
+            if terminated or truncated:
+                obs, info = self.env.reset()
+                if not self.test_mode:  # Training
+                    self.client.end_episode(self.eid, obs)
+                    self.eid = self.client.start_episode(training_enabled=True)
+            ###################################
 
-        # Sending the RAN slicing control message to the RIC
-        for slice_id in range(2):
-            sst = b"\x01" if slice_id == 1 else b"\x00"
-            sd = b"\x00\x00\x00"
-        slices_id = [
-            {"sST": b"\x00", "sD": b"\x00\x00\x00"},
-            {"sST": b"\x01", "sD": b"\x00\x00\x00"},]
-        
-        self.send_ran_slicing_control(
-            slices_id, perc_action, rmrxapp, summary, sbuf
-        )
+            # Sending the RAN slicing control message to the RIC
+            for slice_id in range(2):
+                sst = b"\x01" if slice_id == 1 else b"\x00"
+                sd = b"\x00\x00\x00"
+            slices_id = [
+                {"sST": b"\x00", "sD": b"\x00\x00\x00"},
+                {"sST": b"\x01", "sD": b"\x00\x00\x00"},]
+            
+            self.send_ran_slicing_control(
+                slices_id, perc_action, rmrxapp, summary, sbuf
+            )
 
         rmrxapp.rmr_free(sbuf)
 
