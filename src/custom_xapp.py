@@ -19,6 +19,8 @@ from typing import Dict
 from .env import MobNet, server_rl
 import csv
 from pathlib import Path
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+import datetime
 from ray import tune
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.env.policy_client import PolicyClient
@@ -33,6 +35,8 @@ class XappNori:
         """
         Initializes the custom xApp instance and instatiates the xApp framework object.
         """
+
+        self.enable_ran_slicing = True # If false it only executes KPM without RC
 
         # Initializing a logger for the custom xApp instance in Debug level (logs everything)
         self.logger = Logger(
@@ -62,9 +66,10 @@ class XappNori:
         )
 
         # RL Server
-        self.env = MobNet()
-        self.env_thread = Thread(target=server_rl, daemon=True)
-        self.env_thread.start()
+        if self.enable_ran_slicing:
+            self.env = MobNet()
+            self.env_thread = Thread(target=server_rl, daemon=True)
+            self.env_thread.start()
 
 
         # Registering RMR message handlers
@@ -121,27 +126,36 @@ class XappNori:
         self._ready = True
         self.logger.info("xApp is ready.")
 
-        # RL Client
-        sleep(10)
-        SERVER_ADDRESS = "localhost"
-        RAY_STORAGE = "./ray_results/"
-        AGENT_NAME = "ppo"
-        SERVER_BASE_PORT = 9900
-        self.test_mode = False
-        self.env.reset()
-        if self.test_mode:  # Testing
-            ray_storage = str(Path(RAY_STORAGE).resolve())
-            analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
-            assert analysis.trials is not None, "Analysis trial is None"
-            last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
-            assert last_checkpoint is not None, "Last checkpoint is None"
-            self.algo = Algorithm.from_checkpoint(last_checkpoint)
-        else:  # Training
-            self.client = PolicyClient(
-                f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
-                inference_mode="local",
-            )
-            self.eid = self.client.start_episode(training_enabled=True)
+        # InfluxDB client
+        url = "http://200.239.93.110:30086"  # URL of your InfluxDB instance
+        token = "admin"  # your InfluxDB token
+        org = "openranbr"  # your InfluxDB organization name
+        self.bucket = "openranbr"  # your InfluxDB bucket name
+        self.client = InfluxDBClient(url=url, token=token, org=org)
+        self.write_api = self.client.write_api()
+        
+        if self.enable_ran_slicing:
+            # RL Client
+            sleep(10)
+            SERVER_ADDRESS = "localhost"
+            RAY_STORAGE = "./ray_results/"
+            AGENT_NAME = "ppo"
+            SERVER_BASE_PORT = 9900
+            self.test_mode = False
+            self.env.reset()
+            if self.test_mode:  # Testing
+                ray_storage = str(Path(RAY_STORAGE).resolve())
+                analysis = tune.ExperimentAnalysis(f"{ray_storage}/{AGENT_NAME}/")
+                assert analysis.trials is not None, "Analysis trial is None"
+                last_checkpoint = analysis.get_last_checkpoint(analysis.trials[0])
+                assert last_checkpoint is not None, "Last checkpoint is None"
+                self.algo = Algorithm.from_checkpoint(last_checkpoint)
+            else:  # Training
+                self.client = PolicyClient(
+                    f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
+                    inference_mode="local",
+                )
+                self.eid = self.client.start_episode(training_enabled=True)
 
     # ------------------ START AND STOP
 
@@ -415,48 +429,107 @@ class XappNori:
             "indicationMessage": decoded_ric_indication_message,
         }
 
-        # self.logger.info(f"Decoded E2AP PDU data: {e2pdu_data}")
-        self.logger.info(f"Decoded RIC indication header: {ric_indication_data}")
-        self.logger.info(f"Decoded RIC indication data: {ric_indication_data}")
+        self.logger.info(f"\n\n\n\nDecoded RIC indication data: {ric_indication_data}\n#################\n\n\n\n")
 
-        ########### Interaction with RL Environment
-        # Observation
-        slice_1_avg_thr = 4 # TODO obtain the throughput information from the RIC indication message
-        slice_2_avg_thr = 20
-        obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
+        # Send information to InfluxDB
+        self.send_influxdb_data(ric_indication_data)
 
-        if self.test_mode:  # Testing
-            action = self.algo.compute_single_action(obs, explore=False)
-        else:  # Training
-            action = self.client.get_action(self.eid, obs)
-        assert isinstance(action, np.ndarray), "Action must be a numpy array."
-        perc_action = np.floor((action / np.sum(action)) * 100)
-        self.env.set_obs(obs)
-        self.obs, reward, terminated, truncated, info = self.env.step(action)
-        if not self.test_mode:  # Training
-            self.client.log_returns(self.eid, reward, info=info)
-        if terminated or truncated:
-            obs, info = self.env.reset()
+        if self.enable_ran_slicing:
+            ########### Interaction with RL Environment
+            # Observation
+            slice_1_avg_thr = 4 # TODO obtain the throughput information from the RIC indication message
+            slice_2_avg_thr = 20
+            obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
+
+            if self.test_mode:  # Testing
+                action = self.algo.compute_single_action(obs, explore=False)
+            else:  # Training
+                action = self.client.get_action(self.eid, obs)
+            assert isinstance(action, np.ndarray), "Action must be a numpy array."
+            perc_action = np.floor((action / np.sum(action)) * 100)
+            self.env.set_obs(obs)
+            self.obs, reward, terminated, truncated, info = self.env.step(action)
             if not self.test_mode:  # Training
-                self.client.end_episode(self.eid, obs)
-                self.eid = self.client.start_episode(training_enabled=True)
-        ###################################
+                self.client.log_returns(self.eid, reward, info=info)
+            if terminated or truncated:
+                obs, info = self.env.reset()
+                if not self.test_mode:  # Training
+                    self.client.end_episode(self.eid, obs)
+                    self.eid = self.client.start_episode(training_enabled=True)
+            ###################################
 
-        # Sending the RAN slicing control message to the RIC
-        for slice_id in range(2):
-            sst = b"\x01" if slice_id == 1 else b"\x00"
-            sd = b"\x00\x00\x00"
-        slices_id = [
-            {"sST": b"\x00", "sD": b"\x00\x00\x00"},
-            {"sST": b"\x01", "sD": b"\x00\x00\x00"},]
-        
-        self.send_ran_slicing_control(
-            slices_id, perc_action, rmrxapp, summary, sbuf
-        )
+            # Sending the RAN slicing control message to the RIC
+            for slice_id in range(2):
+                sst = b"\x01" if slice_id == 1 else b"\x00"
+                sd = b"\x00\x00\x00"
+            slices_id = [
+                {"sST": b"\x00", "sD": b"\x00\x00\x00"},
+                {"sST": b"\x01", "sD": b"\x00\x00\x00"},]
+            
+            self.send_ran_slicing_control(
+                slices_id, perc_action, rmrxapp, summary, sbuf
+            )
 
         rmrxapp.rmr_free(sbuf)
 
     # ------------------ HTTP HANDLERS
+
+    def send_influxdb_data(self, data:dict):
+        points = []
+
+        # Common tags
+        collection_start_time = datetime.datetime.now(datetime.timezone.utc) 
+
+        # Extract cellObjectID
+        cell_object_id = data['indicationMessage'][1]['cellObjectID']
+
+        # Cell-level PM info
+        if 'list-of-PM-Information' in data['indicationMessage'][1]:
+            for pm_info in data['indicationMessage'][1]['list-of-PM-Information']:
+                pm_type = pm_info['pmType'][1]
+                pm_val_type, pm_val = pm_info['pmVal']
+
+                # Create a Point
+                p = Point("cell_metrics") \
+                    .tag("cellObjectID", cell_object_id) \
+                    .field(pm_type, pm_val) \
+                    .time(collection_start_time, WritePrecision.NS)
+
+                points.append(p)
+
+        # UE-level PM info
+        if 'list-of-matched-UEs' in data['indicationMessage'][1]:
+            for ue in data['indicationMessage'][1]['list-of-matched-UEs']:
+                ue_id = ue['ueId'].decode()  # ueId is a byte string
+
+                for pm_info in ue['list-of-PM-Information']:
+                    pm_type = pm_info['pmType'][1]
+                    pm_val_type, pm_val = pm_info['pmVal']
+
+                    # Handle valueReal tuple if needed
+                    if pm_val_type == 'valueReal':
+                        # pm_val is like (0, 2, 0), just an example - you might need to parse properly
+                        real_value = pm_val[0] + pm_val[1] * 10**(-pm_val[2])
+                    elif isinstance(pm_val,dict) and 'servingCellMeasurements' in pm_val:
+                        # Extract the SINR value from the nested structure
+                        sinr_value = pm_val['servingCellMeasurements'][1][0]['measResultServingCell']['measResult']['cellResults']['resultsSSB-Cell']['sinr']
+                        real_value = sinr_value
+                    elif isinstance(pm_val, dict):
+                        real_value = None
+                    else:
+                        real_value = pm_val
+
+                    if real_value is not None:
+                        # Create a Point
+                        p = Point("ue_metrics") \
+                            .tag("cellObjectID", cell_object_id) \
+                            .tag("ueId", ue_id) \
+                            .field(pm_type, real_value) \
+                            .time(collection_start_time, WritePrecision.NS)
+
+                        points.append(p)
+        self.write_api.write(bucket=self.bucket, record=points)
+        self.logger.info(f"Data sent to InfluxDB: {len(points)} points")
 
     def send_ran_slicing_control(
         self, slices_id: dict, action: np.ndarray, rmrxapp: RMRXapp, summary: dict, sbuf
