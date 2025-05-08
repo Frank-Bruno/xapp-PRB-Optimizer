@@ -37,6 +37,7 @@ class XappNori:
         """
 
         self.enable_ran_slicing = True # If false it only executes KPM without RC
+        self.save_influx = True # If true it saves the data in InfluxDB
 
         # Initializing a logger for the custom xApp instance in Debug level (logs everything)
         self.logger = Logger(
@@ -127,12 +128,13 @@ class XappNori:
         self.logger.info("xApp is ready.")
 
         # InfluxDB client
-        url = "http://200.239.93.110:30086"  # URL of your InfluxDB instance
-        token = "admin"  # your InfluxDB token
-        org = "openranbr"  # your InfluxDB organization name
-        self.bucket = "openranbr"  # your InfluxDB bucket name
-        self.client = InfluxDBClient(url=url, token=token, org=org)
-        self.write_api = self.client.write_api()
+        if self.save_influx:
+            url = "http://200.239.93.110:30086"  # URL of your InfluxDB instance
+            token = "admin"  # your InfluxDB token
+            org = "openranbr"  # your InfluxDB organization name
+            self.bucket = "openranbr"  # your InfluxDB bucket name
+            self.client = InfluxDBClient(url=url, token=token, org=org)
+            self.write_api = self.client.write_api()
         
         if self.enable_ran_slicing:
             # RL Client
@@ -432,7 +434,8 @@ class XappNori:
         self.logger.info(f"\n\n\n\nDecoded RIC indication data: {ric_indication_data}\n#################\n\n\n\n")
 
         # Send information to InfluxDB
-        self.send_influxdb_data(ric_indication_data)
+        if self.save_influx:
+            self.send_influxdb_data(ric_indication_data)
 
         if self.enable_ran_slicing:
             ########### Interaction with RL Environment
@@ -508,8 +511,8 @@ class XappNori:
 
                     # Handle valueReal tuple if needed
                     if pm_val_type == 'valueReal':
-                        # pm_val is like (0, 2, 0), just an example - you might need to parse properly
-                        real_value = pm_val[0] + pm_val[1] * 10**(-pm_val[2])
+                        # pm_val[0] is matissa, pm_val[1] is base, pm_val[2] is exponent
+                        real_value = float(pm_val[0]) * float(pm_val[1]**(-pm_val[2]))
                     elif isinstance(pm_val,dict) and 'servingCellMeasurements' in pm_val:
                         # Extract the SINR value from the nested structure
                         sinr_value = pm_val['servingCellMeasurements'][1][0]['measResultServingCell']['measResult']['cellResults']['resultsSSB-Cell']['sinr']
