@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Remove previous installations
+helm uninstall influxdb -n influxdb
+helm uninstall grafana -n grafana
+
 # Install InfluxDB
 kubectl create namespace influxdb 
 kubectl create namespace grafana
