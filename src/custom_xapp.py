@@ -68,7 +68,11 @@ class XappNori:
 
         # RL Server
         if self.enable_ran_slicing:
-            self.env = MobNet()
+            self.slice_ues = {
+                1 : ["00001", "00002",],
+                2 : ["00003", "00004",],
+            }
+            self.env = MobNet(debug=True)
             self.env_thread = Thread(target=server_rl, daemon=True)
             self.env_thread.start()
 
@@ -431,7 +435,7 @@ class XappNori:
             "indicationMessage": decoded_ric_indication_message,
         }
 
-        self.logger.info(f"\n\n\n\nDecoded RIC indication data: {ric_indication_data}\n#################\n\n\n\n")
+        # self.logger.info(f"\n\n\n\nDecoded RIC indication data: {ric_indication_data}\n#################\n\n\n\n")
 
         # Send information to InfluxDB
         if self.save_influx:
@@ -440,8 +444,20 @@ class XappNori:
         if self.enable_ran_slicing:
             ########### Interaction with RL Environment
             # Observation
-            slice_1_avg_thr = 4 # TODO obtain the throughput information from the RIC indication message
-            slice_2_avg_thr = 20
+            ues_thr = self.get_thr_data(ric_indication_data)
+            slice1_ues_thr = []
+            slice2_ues_thr = []
+            for ue_id, ue_thr in ues_thr:
+                if ue_id in self.slice_ues[1]:
+                    slice1_ues_thr.append(ue_thr)
+                elif ue_id in self.slice_ues[2]:
+                    slice2_ues_thr.append(ue_thr)
+            if (len(slice1_ues_thr) + len(slice2_ues_thr)) == 0:
+                # self.logger.warning("No UEs in the slices.")
+                # print(f"\n\n\n\n\n#########################\n{ric_indication_data}\n#########################\n\n\n\n\n")
+                return
+            slice_1_avg_thr = float(np.mean(slice1_ues_thr))
+            slice_2_avg_thr = float(np.mean(slice2_ues_thr))
             obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
 
             if self.test_mode:  # Testing
@@ -532,7 +548,24 @@ class XappNori:
 
                         points.append(p)
         self.write_api.write(bucket=self.bucket, record=points)
-        self.logger.info(f"Data sent to InfluxDB: {len(points)} points")
+        # self.logger.info(f"Data sent to InfluxDB: {len(points)} points")
+
+    def get_thr_data(self, data:dict)->list:
+        # Extract cellObjectID
+        cell_object_id = data['indicationMessage'][1]['cellObjectID']
+        thr_ues = []
+        # UE-level PM info
+        if 'list-of-matched-UEs' in data['indicationMessage'][1]:
+            for ue in data['indicationMessage'][1]['list-of-matched-UEs']:
+                ue_id = ue['ueId'].decode()  # ueId is a byte string
+                for pm_info in ue['list-of-PM-Information']:
+                    pm_type = pm_info['pmType'][1]
+                    pm_val_type, pm_val = pm_info['pmVal']
+                    if pm_type == "QosFlow.PdcpPduVolumeDL_Filter.UEID":
+                        ue_thr = (50*float(pm_val))/1000 # Mbps
+                        thr_ues.append((ue_id, ue_thr))
+
+        return thr_ues
 
     def send_ran_slicing_control(
         self, slices_id: dict, action: np.ndarray, rmrxapp: RMRXapp, summary: dict, sbuf
