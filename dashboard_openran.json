@@ -283,7 +283,7 @@
         {
           "id": "calculateField",
           "options": {
-            "alias": "slice_1",
+            "alias": "slice_1_sum",
             "binary": {
               "left": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00001\"}",
               "reducer": "sum",
@@ -298,11 +298,75 @@
         {
           "id": "calculateField",
           "options": {
-            "alias": "slice_2",
+            "alias": "slice_1_sum_period",
+            "binary": {
+              "left": "slice_1_sum",
+              "operator": "*",
+              "reducer": "sum",
+              "right": "50"
+            },
+            "mode": "binary",
+            "reduce": {
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "slice_1",
+            "binary": {
+              "left": "slice_1_sum_period",
+              "operator": "/",
+              "reducer": "sum",
+              "right": "2"
+            },
+            "mode": "binary",
+            "reduce": {
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "slice_2_sum",
             "binary": {
               "left": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00003\"}",
               "reducer": "sum",
               "right": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00004\"}"
+            },
+            "mode": "binary",
+            "reduce": {
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "slice_2_sum_period",
+            "binary": {
+              "left": "slice_2_sum",
+              "operator": "*",
+              "reducer": "sum",
+              "right": "50"
+            },
+            "mode": "binary",
+            "reduce": {
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "slice_2",
+            "binary": {
+              "left": "slice_2_sum_period",
+              "operator": "/",
+              "reducer": "sum",
+              "right": "2"
             },
             "mode": "binary",
             "reduce": {
@@ -538,7 +602,7 @@
               "left": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00001\"}",
               "operator": "*",
               "reducer": "sum",
-              "right": "2"
+              "right": "50"
             },
             "mode": "binary",
             "reduce": {
@@ -554,7 +618,7 @@
               "left": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00002\"}",
               "operator": "*",
               "reducer": "sum",
-              "right": "2"
+              "right": "50"
             },
             "mode": "binary",
             "reduce": {
@@ -570,7 +634,7 @@
               "left": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00003\"}",
               "operator": "*",
               "reducer": "sum",
-              "right": "2"
+              "right": "50"
             },
             "mode": "binary",
             "reduce": {
@@ -586,7 +650,7 @@
               "left": "QosFlow.PdcpPduVolumeDL_Filter.UEID {name=\"ue_metrics\", ueId=\"00004\"}",
               "operator": "*",
               "reducer": "sum",
-              "right": "2"
+              "right": "50"
             },
             "mode": "binary",
             "reduce": {
@@ -633,13 +697,13 @@
     "list": []
   },
   "time": {
-    "from": "now-5m",
+    "from": "now-10s",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "openran-br",
   "uid": "cbf6eff3-29d0-4d70-9580-cba555799e98",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
