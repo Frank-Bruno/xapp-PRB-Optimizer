@@ -27,14 +27,10 @@ class MobNet(Env):
         self.max_number_ep = 10
         self.action_space = spaces.Box(low=0.1, high=1, shape=(2,))
         self.observation_space = spaces.Box(
-            low=0, high=100, shape=(2,), dtype=np.float32
+            low=0, high=np.inf, shape=(2,), dtype=np.float32
         )
-        self.ns3_config = {
-            "number_slices": 2,
-            "slice_ue_rnti": [[1, 2], [3, 4]],
-        }
 
-        self.slice_req = np.array([5, 10])
+        self.slice_req = np.array([4, 1])
         self.debug = debug
 
     def step(self, action):
@@ -168,7 +164,7 @@ def server_rl():
         .debugging(log_level="INFO")
         .training(
             lr=0.0003,  # SB3 LR
-            train_batch_size=2048,  # SB3 n_steps
+            train_batch_size=256,  # SB3 n_steps
             sgd_minibatch_size=64,  # type: ignore SB3 batch_size
             num_sgd_iter=10,  # type: ignore SB3 n_epochs
             gamma=0.99,  # SB3 gamma
@@ -191,12 +187,6 @@ def server_rl():
     ]  # Set neural network size
 
     config.experimental()
-    config.update_from_dict(
-        {
-            "train_batch_size": 1000,
-            # "model": {"use_lstm": args.use_lstm},
-        }
-    )
 
     stop = {
         "episodes_total": EPISODES_TOTAL,
