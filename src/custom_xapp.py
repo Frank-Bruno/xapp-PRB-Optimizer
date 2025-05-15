@@ -133,7 +133,7 @@ class XappNori:
 
         # InfluxDB client
         if self.save_influx:
-            url = "http://200.239.93.110:30086"  # URL of your InfluxDB instance
+            url = "http://influxdb-influxdb2.influxdb.svc.cluster.local:8086"  # URL of your InfluxDB instance
             token = "admin"  # your InfluxDB token
             org = "openranbr"  # your InfluxDB organization name
             self.bucket = "openranbr"  # your InfluxDB bucket name
