@@ -38,6 +38,7 @@ class XappNori:
 
         self.enable_ran_slicing = True # If false it only executes KPM without RC
         self.save_influx = True # If true it saves the data in InfluxDB
+        self.influx_url = "http://10.10.50.109:30086/"
 
         # Initializing a logger for the custom xApp instance in Debug level (logs everything)
         self.logger = Logger(
@@ -133,7 +134,7 @@ class XappNori:
 
         # InfluxDB client
         if self.save_influx:
-            url = "http://200.239.93.110:30086"  # URL of your InfluxDB instance
+            url = self.influx_url  # URL of your InfluxDB instance
             token = "admin"  # your InfluxDB token
             org = "openranbr"  # your InfluxDB organization name
             self.bucket = "openranbr"  # your InfluxDB bucket name
@@ -459,6 +460,7 @@ class XappNori:
             slice_1_avg_thr = float(np.mean(slice1_ues_thr))
             slice_2_avg_thr = float(np.mean(slice2_ues_thr))
             obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
+            obs = np.nan_to_num(obs, nan=0)  # Replace NaN with 0
 
             if self.test_mode:  # Testing
                 action = self.algo.compute_single_action(obs, explore=False)
