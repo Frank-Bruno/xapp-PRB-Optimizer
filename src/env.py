@@ -16,30 +16,76 @@ from ray.rllib.env.policy_server_input import PolicyServerInput
 from ray.tune.registry import get_trainable_cls
 import threading
 from time import sleep
-
+from .llm_reward import LLMAgent
+from collections import deque
 
 class MobNet(Env):
-    def __init__(self, env_config=None, debug=False):
+    def __init__(self, slice_number=2, save_energy=False, env_config=None, debug=False, llm_mode=True):
         super(MobNet, self).__init__()
-        self.steps_per_episode = 1000
+        self.llm_agent = LLMAgent()
+        self.intent = """
+            Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 7, 5 e 2 Mbps, respectivamente.
+            Deseja-se cumprir os requisitos e não há interesse em economia de recursos.
+            """
+        self.save_energy = self.llm_agent.get_classification_prompt(self.intent)
+        
+        self.steps_per_episode = 128
         self.curr_step = 0
         self.curr_ep = 0
         self.max_number_ep = 10
-        self.action_space = spaces.Box(low=0.1, high=1, shape=(2,))
+        self.slice_number = slice_number
+        #self.save_energy = save_energy
+        self.action_space = spaces.Box(low=0.1, high=1, shape=(self.slice_number + int(bool(self.save_energy)),))
         self.observation_space = spaces.Box(
-            low=0, high=np.inf, shape=(2,), dtype=np.float32
+            low=0, high=np.inf, shape=(self.slice_number*2,), dtype=np.float32
         )
+        self.max_rbs_rate = 1.0
 
-        self.slice_req = np.array([4, 1])
+        #self.slice_req = np.array([4, 1, 0.1, 0.001])
+        self.slice_req = self.llm_agent.get_requiriments(self.intent)
         self.debug = debug
+        self.k = self.llm_agent.k_type(self.intent, self.slice_req)
+        self.buffer = 20
+        
+        ## PARA O PROPORTIONAL FAIR
+        self.obs_window = 10
 
+        self.ewma_alpha = 0.3
+        self.slice_obs_hist = [deque(maxlen=self.obs_window) for _ in range(self.slice_number)]
+
+        self.slice_obs_avg = np.zeros(self.slice_number, dtype=np.float64)
+        self.llm_mode = llm_mode
+        
+            
+        #1°Caso
+        #    """
+        #    Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho.
+        #    Deseja-se cumprir os requisitos e não há interesse em economia de recursos.
+        #    """
+        #2°Caso
+        #    """
+        #    Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho.
+        #    Deseja-se cumprir os requisitos do primeiro slice, sem ultrapassá-los ou ficar abaixo, para maximizar o desempenho no segundo slice, no qual é desejado que o desempeno seja o maior possível.
+        #    """
+        #3°Caso
+        #    """
+        #    Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho.
+        #    Deseja-se cumprir os requisitos, mas há interesse em economia de recursos.
+        #    """
+        #4°Caso
+        #    """
+        #    Considere uma situação na qual tem-se dois slices de rede, com seus requisitos de performance sendo vazão de dados e latência, respectivamente.
+        #    Deseja-se otimizar a performance dos dois slices simultaneamente.
+        #    """
     def step(self, action):
-        perc_action = np.floor((action / np.sum(action)) * 100)
-        reward = self.calculate_reward(self.obs)
+        if self.llm_mode:
+            reward = self.calculate_reward(self.obs)
+        else:
+            reward = 1
         terminated, truncated = False, False
         if self.debug:
             print(
-                f"Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward} Action: {perc_action}, Obs: {self.obs}, Req: {self.slice_req}"
+                f"DEBUG: Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward}, Max_BRs: {self.max_rbs_rate}, Action: {action}, Obs: {self.obs}, Req: {self.slice_req}"
             )
         self.curr_step += 1
         if self.curr_step > self.steps_per_episode:
@@ -47,28 +93,82 @@ class MobNet(Env):
             self.curr_ep += 1
 
         return self.obs, reward, terminated, truncated, {}
+    
+    def generate_action(self, action):
+        if self.save_energy:
+            max_rbs_rate = action[-1]
+            self.max_rbs_rate = max_rbs_rate
+        else:
+            max_rbs_rate = self.max_rbs_rate
+        rbs_action = action[0:self.slice_number]
+        perc_action = np.floor((rbs_action / np.sum(rbs_action)) * (100*max_rbs_rate))
+        return perc_action
 
     def reset(self, seed=None, options=None):
         self.curr_step = 0
         if self.curr_ep > self.max_number_ep:
             self.curr_ep = 0
-        return np.array([0, 0]), {}
+        return np.zeros((self.slice_number*2)), {}
 
     def set_obs(self, obs):
         self.obs = obs
+        obs = obs if self.curr_step > 0 else np.ones((self.slice_number*2))
+        if self.llm_mode:
+            self.record_network_observation(obs)
 
     def calculate_reward(
         self,
-        obs: np.ndarray,
+        slice_obs: np.ndarray,
     ) -> float:
-        reward = 0.0
-        under_thr = obs < self.slice_req
-        if under_thr.any():
-            reward -= np.mean(
-                (self.slice_req[under_thr] - obs[under_thr]) / self.slice_req[under_thr]
-            )
+        
+        if not self.llm_agent.existing_code():
+            #print("O código ainda não existe ou não foi encontrado.")
+            code = self.llm_agent.create_reward_function(self.intent,self.slice_req, self.k)
+            reward = self.llm_agent.run_reward_function(slice_obs[:int(np.size(slice_obs)/2)], self.slice_req[:int(np.size(self.slice_req)/2)], self.buffer, self.k)
+            
+            # Para o caso 4
+            #reward = self.llm_agent.run_reward_function(slice_obs, self.slice_req, self.k) 
+        else:
+            reward = self.llm_agent.run_reward_function(slice_obs[:int(np.size(slice_obs)/2)], self.slice_req[:int(np.size(self.slice_req)/2)], self.buffer, self.k)
+            
+            # Para o caso 4
+            #reward = self.llm_agent.run_reward_function(slice_obs, self.slice_req, self.buffer, self.k) 
+        #reward -= np.mean(
+        #    (self.slice_req[under_thr] - obs[under_thr]) / self.slice_req[under_thr]
+        #)
         assert isinstance(reward, float)
         return reward
+    
+    def proportional_fair_allocation(self, slice_obs, slice_obs_avg):
+        proportion = slice_obs / slice_obs_avg
+
+        allocation = proportion / proportion.sum()
+
+        return allocation
+    
+    def proportional_fair_schedule(self):
+        thr = np.array(self.obs[:self.slice_number], dtype=np.float64)
+        avg = np.where(self.slice_obs_avg > 0, self.slice_obs_avg, np.maximum(thr, 1e-9))
+        proportion = thr / avg
+        proportion[proportion <= 0] = 1e-9
+        allocation = proportion / proportion.sum()
+        #tau = 2
+        #exp_metrics = np.exp(proportion/tau)
+        #allocation = exp_metrics / exp_metrics.sum()
+        return allocation *100
+    
+    def record_network_observation(self, slice_obs: np.ndarray):
+        thr = np.array(slice_obs[:self.slice_number], dtype=np.float64)
+        for i, val in enumerate(thr):
+            self.slice_obs_hist[i].append(val)
+            if self.slice_obs_avg[i] == 0 and len(self.slice_obs_hist[i]) == 1:
+                self.slice_obs_avg[i] = val
+            else:
+                #self.slice_obs_avg[i] = (1 - self.ewma_alpha) * self.slice_obs_avg[i] + self.ewma_alpha * val
+                self.slice_obs_avg[i] = np.mean(list(self.slice_obs_hist[i]))
+        #print(f"DEBUG: Slice hist: {self.slice_obs_hist}")
+        #print(f"DEBUG: Slice Obs Avg:{self.slice_obs_avg}")    
+        return self.slice_obs_avg
 
 
 def client_rl(test_mode: bool = False):
@@ -122,14 +222,14 @@ def client_rl(test_mode: bool = False):
                 break
 
 
-def server_rl():
+def server_rl(slice_number=2, save_energy=False, env_config=None, debug=False, llm_mode=True):
     SERVER_ADDRESS = "localhost"
     SERVER_BASE_PORT = 9900
     RAY_STORAGE = "./ray_results/"
     AGENT_NAME = "oai_ppo"
     EPISODES_TOTAL = 100000
     DEBUG_MODE = False
-    env = MobNet()
+    env = MobNet(slice_number=slice_number, save_energy=save_energy, debug=debug, llm_mode=llm_mode)
     ray_storage = str(Path(RAY_STORAGE).resolve())
     ray.init(local_mode=DEBUG_MODE)
 
@@ -164,8 +264,8 @@ def server_rl():
         .debugging(log_level="INFO")
         .training(
             lr=0.0003,  # SB3 LR
-            train_batch_size=256,  # SB3 n_steps
-            sgd_minibatch_size=64,  # type: ignore SB3 batch_size
+            train_batch_size=128,  # SB3 n_steps
+            sgd_minibatch_size=32,  # type: ignore SB3 batch_size
             num_sgd_iter=10,  # type: ignore SB3 n_epochs
             gamma=0.99,  # SB3 gamma
             lambda_=0.95,  # type: ignore # SB3 gae_lambda

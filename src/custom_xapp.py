@@ -18,6 +18,7 @@ import numpy as np
 from typing import Dict
 from .env import MobNet, server_rl
 import csv
+import math
 from pathlib import Path
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 import datetime
@@ -25,6 +26,7 @@ from ray import tune
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.env.policy_client import PolicyClient
 
+LLM_AGENT = True
 
 class XappNori:
     """
@@ -38,7 +40,7 @@ class XappNori:
 
         self.enable_ran_slicing = True # If false it only executes KPM without RC
         self.save_influx = True # If true it saves the data in InfluxDB
-        self.influx_url = "http://10.10.50.109:30086/"
+        self.influx_url = "http://influxdb-influxdb2.influxdb.svc.cluster.local:8086"
 
         # Initializing a logger for the custom xApp instance in Debug level (logs everything)
         self.logger = Logger(
@@ -69,12 +71,14 @@ class XappNori:
 
         # RL Server
         if self.enable_ran_slicing:
-            self.slice_ues = {
-                1 : ["00001", "00002",],
-                2 : ["00003", "00004",],
-            }
-            self.env = MobNet(debug=True)
-            self.env_thread = Thread(target=server_rl, daemon=True)
+            self.save_energy = False
+            #self.slice_ues = {{
+            #    1 : ["00004", "00005",],
+            #    2 : ["00006","00007",],
+            #}}
+            self.slice_ues = {}
+            self.env = MobNet(debug=True, slice_number=3, save_energy=self.save_energy, llm_mode=LLM_AGENT)
+            self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 3, "debug": True, "llm_mode": LLM_AGENT}, daemon=False)
             self.env_thread.start()
 
 
@@ -143,7 +147,7 @@ class XappNori:
         
         if self.enable_ran_slicing:
             # RL Client
-            sleep(10)
+            sleep(30)
             SERVER_ADDRESS = "localhost"
             RAY_STORAGE = "./ray_results/"
             AGENT_NAME = "ppo"
@@ -445,51 +449,125 @@ class XappNori:
         if self.enable_ran_slicing:
             ########### Interaction with RL Environment
             # Observation
-            ues_thr = self.get_thr_data(ric_indication_data)
-            slice1_ues_thr = []
-            slice2_ues_thr = []
-            for ue_id, ue_thr in ues_thr:
-                if ue_id in self.slice_ues[1]:
-                    slice1_ues_thr.append(ue_thr)
-                elif ue_id in self.slice_ues[2]:
-                    slice2_ues_thr.append(ue_thr)
-            if (len(slice1_ues_thr) + len(slice2_ues_thr)) == 0:
-                # self.logger.warning("No UEs in the slices.")
-                # print(f"\n\n\n\n\n#########################\n{ric_indication_data}\n#########################\n\n\n\n\n")
-                return
-            slice_1_avg_thr = float(np.mean(slice1_ues_thr))
-            slice_2_avg_thr = float(np.mean(slice2_ues_thr))
-            obs = np.array([slice_1_avg_thr, slice_2_avg_thr])
-            obs = np.nan_to_num(obs, nan=0)  # Replace NaN with 0
-
-            if self.test_mode:  # Testing
-                action = self.algo.compute_single_action(obs, explore=False)
-            else:  # Training
-                action = self.client.get_action(self.eid, obs)
-            assert isinstance(action, np.ndarray), "Action must be a numpy array."
-            perc_action = np.floor((action / np.sum(action)) * 100)
-            self.env.set_obs(obs)
-            self.obs, reward, terminated, truncated, info = self.env.step(action)
-            if not self.test_mode:  # Training
-                self.client.log_returns(self.eid, reward, info=info)
-            if terminated or truncated:
-                obs, info = self.env.reset()
-                if not self.test_mode:  # Training
-                    self.client.end_episode(self.eid, obs)
-                    self.eid = self.client.start_episode(training_enabled=True)
-            ###################################
-
-            # Sending the RAN slicing control message to the RIC
-            for slice_id in range(2):
-                sst = b"\x01" if slice_id == 1 else b"\x00"
-                sd = b"\x00\x00\x00"
-            slices_id = [
-                {"sST": b"\x00", "sD": b"\x00\x00\x00"},
-                {"sST": b"\x01", "sD": b"\x00\x00\x00"},]
+            ues_thr, ues_lat, sid_ue = self.get_thr_data(ric_indication_data)
             
-            self.send_ran_slicing_control(
-                slices_id, perc_action, rmrxapp, summary, sbuf
-            )
+            if not self.slice_ues:
+                self.slice_ues = sid_ue
+                #print(f"Debug: slice_ues: {self.slice_ues}")   
+                return
+            
+            else:
+                #print(f"Debug: slice_ues: {self.slice_ues}")   
+                slice_ues_thr = {}
+                slice_ues_lat = {}
+                
+                for ue_id, ue_thr in ues_thr:
+                    for slice_id, ues_na_slice in self.slice_ues.items():
+                        if ue_id in ues_na_slice:
+                            slice_ues_thr.setdefault(slice_id,[]).append(ue_thr)
+                            break 
+                        
+                for ue_id, ue_lat in ues_lat:
+                    for slice_id, ues_na_slice in self.slice_ues.items():
+                        if ue_id in ues_na_slice:
+                            slice_ues_lat.setdefault(slice_id,[]).append(ue_lat)
+                            break 
+                
+                #slice1_ues_thr = []
+                #slice2_ues_thr = []
+                #slice1_ues_lat = []
+                #slice2_ues_lat = []
+                #for ue_id, ue_thr in ues_thr:
+                #    if ue_id in self.slice_ues[1]:
+                #        slice1_ues_thr.append(ue_thr)
+                #    elif ue_id in self.slice_ues[2]:
+                #        #print(f"UE ID {ue_id} with throughput {ue_thr} added to slice 2 <-------------------------------")
+                #        slice2_ues_thr.append(ue_thr)
+                #for ue_id, ue_lat in ues_lat:
+                #    if ue_id in self.slice_ues[1]:
+                #        slice1_ues_lat.append(ue_lat)
+                #    elif ue_id in self.slice_ues[2]:
+                #        slice2_ues_lat.append(ue_lat)
+
+                if (len(slice_ues_thr)) == 0:
+                #if (len(slice1_ues_thr) + len(slice2_ues_thr)) == 0:
+                    # self.logger.warning("No UEs in the slices.")
+                    # print(f"\n\n\n\n\n#########################\n{ric_indication_data}\n#########################\n\n\n\n\n")
+                    return
+                
+                #slice_avg_thr = []
+                #slice_avg_lat = []
+                #
+                #for slice_id in self.slice_ues:
+                #    slice_avg_thr.append(np.mean(slice_ues_thr[slice_id]))
+                #    slice_avg_lat.append(np.mean(slice_ues_lat[slice_id]))
+
+                
+                #slice_1_avg_thr = float(np.mean(slice1_ues_thr))
+                #slice_1_avg_lat = float(np.mean(slice1_ues_lat))
+                #slice_2_avg_thr = float(np.mean(slice2_ues_thr))
+                #slice_2_avg_lat = float(np.mean(slice2_ues_lat))
+                
+                
+                # TODO Criar uma forma mais robusta de lidar com a observacao em cada caso
+                obs = []
+                for slice_id in self.slice_ues:
+                    obs.append(np.mean(slice_ues_thr[slice_id]))
+                for slice_id in self.slice_ues:
+                    obs.append(np.mean(slice_ues_lat[slice_id]))
+                obs = np.array(obs) 
+                obs = np.nan_to_num(obs, nan=0) # Replace NaN with 0
+                #print(f"Observation: {obs}")
+                
+                #obs = np.array([slice_1_avg_thr, slice_1_avg_lat, slice_2_avg_thr, slice_2_avg_lat])
+                #obs = np.nan_to_num(obs, nan=0)  # Replace NaN with 0
+                
+
+                if self.test_mode:  # Testing
+                    action = self.algo.compute_single_action(obs, explore=False)
+                else:  # Training
+                    action = self.client.get_action(self.eid, obs)
+                assert isinstance(action, np.ndarray), "Action must be a numpy array."
+
+                self.env.set_obs(obs)
+                if LLM_AGENT:
+                    perc_action = self.env.generate_action(action)
+                else:
+                    perc_action = self.env.proportional_fair_schedule()
+
+                #self.env.set_obs(obs)
+                self.obs, reward, terminated, truncated, info = self.env.step(perc_action)
+                if not self.test_mode:  # Training
+                    self.client.log_returns(self.eid, reward, info=info)
+                if terminated or truncated:
+                    obs, info = self.env.reset()
+                    if not self.test_mode:  # Training
+                        self.client.end_episode(self.eid, obs)
+                        self.eid = self.client.start_episode(training_enabled=True)
+                ###################################
+
+                # Sending the RAN slicing control message to the RIC
+                #for slice_id in range(2):
+                #    sst = b"\x01" if slice_id == 1 else b"\x00"
+                #    sd = b"\x00\x00\x00"
+                #
+                slices_id = [
+                    {"sST": b"\x01", "sD": b"\x00\x00\x00"}, # TODO Get automatically
+                    {"sST": b"\x02", "sD": b"\x00\x00\x00"},]
+                
+                slices_id = [
+                     {
+                         "sST": id_slice, 
+                         "sD": b"\x00\x00\x00"
+                     } 
+                     for id_slice in self.slice_ues.keys()
+                ]
+                #print(f"DEBUG: ++++++++ self.slices_ues: {self.slice_ues}")
+                #print(f"DEBUG: ++++++++ slices_id: {slices_id}")
+
+                self.send_ran_slicing_control(
+                    slices_id, perc_action, int(np.floor(self.env.max_rbs_rate*100)), rmrxapp, summary, sbuf
+                )
 
         rmrxapp.rmr_free(sbuf)
 
@@ -530,7 +608,7 @@ class XappNori:
                     # Handle valueReal tuple if needed
                     if pm_val_type == 'valueReal':
                         # pm_val[0] is matissa, pm_val[1] is base, pm_val[2] is exponent
-                        real_value = float(pm_val[0]) * float(pm_val[1]**(-pm_val[2]))
+                        real_value = float(pm_val[0] * math.pow(pm_val[1], pm_val[2]))
                     elif isinstance(pm_val,dict) and 'servingCellMeasurements' in pm_val:
                         # Extract the SINR value from the nested structure
                         sinr_value = pm_val['servingCellMeasurements'][1][0]['measResultServingCell']['measResult']['cellResults']['resultsSSB-Cell']['sinr']
@@ -549,13 +627,16 @@ class XappNori:
                             .time(collection_start_time, WritePrecision.NS)
 
                         points.append(p)
+                        # print("PM Type: ", pm_type, " PM Value Type: ", pm_val_type, " PM Value: ", pm_val, " Real Value: ", real_value)
         self.write_api.write(bucket=self.bucket, record=points)
         # self.logger.info(f"Data sent to InfluxDB: {len(points)} points")
 
-    def get_thr_data(self, data:dict)->list:
+    def get_thr_data(self, data:dict):
         # Extract cellObjectID
         cell_object_id = data['indicationMessage'][1]['cellObjectID']
         thr_ues = []
+        lat_ues = []
+        sid_ue = {} 
         # UE-level PM info
         if 'list-of-matched-UEs' in data['indicationMessage'][1]:
             for ue in data['indicationMessage'][1]['list-of-matched-UEs']:
@@ -566,11 +647,18 @@ class XappNori:
                     if pm_type == "QosFlow.PdcpPduVolumeDL_Filter.UEID":
                         ue_thr = (50*float(pm_val))/1000 # Mbps
                         thr_ues.append((ue_id, ue_thr))
-
-        return thr_ues
+                    elif pm_type == "DRB.AvgRlcLatencyDl.UEID":
+                        # print("Here is the pm_val: ", pm_val)
+                        ue_lat = float(pm_val[0] * math.pow(pm_val[1], pm_val[2]))
+                        lat_ues.append((ue_id, ue_lat))
+                    elif pm_type == "DRB.NetworkSlicing.SST.UEID":
+                        #print(f"DEBUG:-----> slice id:{pm_val}, ui_id:{ue_id}")
+                        sid_ue.setdefault(pm_val, []).append(ue_id)
+        print("DEBUG:-->get sid_ue:", sid_ue)
+        return thr_ues, lat_ues, sid_ue
 
     def send_ran_slicing_control(
-        self, slices_id: dict, action: np.ndarray, rmrxapp: RMRXapp, summary: dict, sbuf
+        self, slices_id: dict, action: np.ndarray, max_rbs:int, rmrxapp: RMRXapp, summary: dict, sbuf
     ):
         """
         Sends a RAN slicing control message to the RIC.
@@ -580,22 +668,22 @@ class XappNori:
         # Encoding RIC Control Header
         asn1_control_header = E2SM_KPM_RC.E2SM_RC_ControlHeader
         rrm_policy_list = []
-        for slice_id, rb_alloc in zip(slices_id, action):
+        for slice_id in slices_id:
             rrm_policy = {
                 "rrmPolicy": {
                     "rrmPolicyMemberList": [
                         {
                             "plmnIdentity": b"\x00\x01\x02",
                             "sNSSAI": {
-                                "sST": slice_id["sST"],
+                                "sST": slice_id["sST"].to_bytes(1, byteorder='big'),
                                 "sD": slice_id["sD"],
                             },
                         }
                     ]
                 },
-                "dedicatedPRBPolicyRatio": int(rb_alloc),
-                "minPRBPolicyRatio": int(rb_alloc),
-                "maxPRBPolicyRatio": 100,
+                "dedicatedPRBPolicyRatio": int(action[slice_id["sST"]-1]),
+                "minPRBPolicyRatio": int(action[slice_id["sST"]-1]),
+                "maxPRBPolicyRatio": int(max_rbs),
             }
             rrm_policy_list.append(rrm_policy)
         ric_control_header = ('controlHeader-Format1', {
