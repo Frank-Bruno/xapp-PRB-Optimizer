@@ -77,8 +77,8 @@ class XappNori:
             #    2 : ["00006","00007",],
             #}}
             self.slice_ues = {}
-            self.env = MobNet(debug=True, slice_number=3, save_energy=self.save_energy, llm_mode=LLM_AGENT)
-            self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 3, "debug": True, "llm_mode": LLM_AGENT}, daemon=False)
+            self.env = MobNet(debug=True, slice_number=2, save_energy=self.save_energy, llm_mode=LLM_AGENT)
+            self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 2, "debug": True, "llm_mode": LLM_AGENT}, daemon=False)
             self.env_thread.start()
 
 
@@ -451,12 +451,12 @@ class XappNori:
             # Observation
             ues_thr, ues_lat, sid_ue = self.get_thr_data(ric_indication_data)
             
-            if not self.slice_ues:
+            if not self.slice_ues and not sid_ue.get(0):
                 self.slice_ues = sid_ue
                 #print(f"Debug: slice_ues: {self.slice_ues}")   
                 return
             
-            else:
+            elif self.slice_ues:
                 #print(f"Debug: slice_ues: {self.slice_ues}")   
                 slice_ues_thr = {}
                 slice_ues_lat = {}
@@ -551,9 +551,9 @@ class XappNori:
                 #    sst = b"\x01" if slice_id == 1 else b"\x00"
                 #    sd = b"\x00\x00\x00"
                 #
-                slices_id = [
-                    {"sST": b"\x01", "sD": b"\x00\x00\x00"}, # TODO Get automatically
-                    {"sST": b"\x02", "sD": b"\x00\x00\x00"},]
+                #slices_id = [
+                #    {"sST": b"\x01", "sD": b"\x00\x00\x00"}, # TODO Get automatically
+                #    {"sST": b"\x02", "sD": b"\x00\x00\x00"},]
                 
                 slices_id = [
                      {
@@ -645,7 +645,7 @@ class XappNori:
                     pm_type = pm_info['pmType'][1]
                     pm_val_type, pm_val = pm_info['pmVal']
                     if pm_type == "QosFlow.PdcpPduVolumeDL_Filter.UEID":
-                        ue_thr = (50*float(pm_val))/1000 # Mbps
+                        ue_thr = (2*5*float(pm_val))/1000 # Mbps
                         thr_ues.append((ue_id, ue_thr))
                     elif pm_type == "DRB.AvgRlcLatencyDl.UEID":
                         # print("Here is the pm_val: ", pm_val)
@@ -654,7 +654,9 @@ class XappNori:
                     elif pm_type == "DRB.NetworkSlicing.SST.UEID":
                         #print(f"DEBUG:-----> slice id:{pm_val}, ui_id:{ue_id}")
                         sid_ue.setdefault(pm_val, []).append(ue_id)
-        print("DEBUG:-->get sid_ue:", sid_ue)
+        #print("DEBUG:-->get sid_ue:", sid_ue)
+        #print("DEBUG:-->get thr_ues:", thr_ues)
+        #print("DEBUG:-->get lat_ues:", lat_ues)
         return thr_ues, lat_ues, sid_ue
 
     def send_ran_slicing_control(
@@ -681,9 +683,9 @@ class XappNori:
                         }
                     ]
                 },
-                "dedicatedPRBPolicyRatio": int(action[slice_id["sST"]-1]),
+                "dedicatedPRBPolicyRatio": int(action[slice_id["sST"]-1]),#80 if slice_id["sST"] == 1 else 20, #
                 "minPRBPolicyRatio": int(action[slice_id["sST"]-1]),
-                "maxPRBPolicyRatio": int(max_rbs),
+                "maxPRBPolicyRatio": int(action[slice_id["sST"]-1]), #int(max_rbs),
             }
             rrm_policy_list.append(rrm_policy)
         ric_control_header = ('controlHeader-Format1', {

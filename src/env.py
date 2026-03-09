@@ -18,15 +18,18 @@ import threading
 from time import sleep
 from .llm_reward import LLMAgent
 from collections import deque
+import csv
+from datetime import datetime
 
 class MobNet(Env):
     def __init__(self, slice_number=2, save_energy=False, env_config=None, debug=False, llm_mode=True):
         super(MobNet, self).__init__()
         self.llm_agent = LLMAgent()
         self.intent = """
-            Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 7, 5 e 2 Mbps, respectivamente.
+            Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 10 e 2 Mbps, respectivamente.
             Deseja-se cumprir os requisitos e não há interesse em economia de recursos.
             """
+        #self.case_num = 
         self.save_energy = self.llm_agent.get_classification_prompt(self.intent)
         
         self.steps_per_episode = 128
@@ -45,7 +48,7 @@ class MobNet(Env):
         self.slice_req = self.llm_agent.get_requiriments(self.intent)
         self.debug = debug
         self.k = self.llm_agent.k_type(self.intent, self.slice_req)
-        self.buffer = 20
+        self.buffer = 1
         
         ## PARA O PROPORTIONAL FAIR
         self.obs_window = 10
@@ -56,6 +59,13 @@ class MobNet(Env):
         self.slice_obs_avg = np.zeros(self.slice_number, dtype=np.float64)
         self.llm_mode = llm_mode
         
+        self.csv_file = "caso_1_log.csv"
+        if not os.path.exists(self.csv_file):
+            with open(self.csv_file, mode="w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "timestamp","episode", "step", "reward", "max_rbs_rate", "action", "obs", "slice_req"
+                ])
             
         #1°Caso
         #    """
@@ -83,6 +93,21 @@ class MobNet(Env):
         else:
             reward = 1
         terminated, truncated = False, False
+        
+        timestamp = datetime.utcnow().isoformat()
+        with open(self.csv_file, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                timestamp, 
+                self.curr_ep,
+                self.curr_step,
+                reward,
+                self.max_rbs_rate,
+                action.tolist() if hasattr(action, "tolist") else action,
+                self.obs.tolist() if hasattr(self.obs, "tolist") else self.obs,
+                np.asarray(self.slice_req).tolist() if hasattr(np.asarray(self.slice_req), "tolist") else self.slice_req
+            ])
+        
         if self.debug:
             print(
                 f"DEBUG: Episode: {self.curr_ep}, Step: {self.curr_step}, Reward: {reward}, Max_BRs: {self.max_rbs_rate}, Action: {action}, Obs: {self.obs}, Req: {self.slice_req}"
@@ -123,7 +148,8 @@ class MobNet(Env):
         
         if not self.llm_agent.existing_code():
             #print("O código ainda não existe ou não foi encontrado.")
-            code = self.llm_agent.create_reward_function(self.intent,self.slice_req, self.k)
+            #TODO: Corrigir para considerar todos os casos
+            code = self.llm_agent.create_reward_function(self.intent,self.slice_req[:int(np.size(self.slice_req)/2)], self.k)
             reward = self.llm_agent.run_reward_function(slice_obs[:int(np.size(slice_obs)/2)], self.slice_req[:int(np.size(self.slice_req)/2)], self.buffer, self.k)
             
             # Para o caso 4

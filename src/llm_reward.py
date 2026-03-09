@@ -7,7 +7,7 @@ import importlib.util
 from pathlib import Path
 import numpy as np
 
-env_path = Path("/tmp/src/.env") 
+env_path = Path("/tmp/src/.env") #path to .env file with OPENAI_API_KEY
 load_dotenv(dotenv_path=env_path)
 
 class LLMAgent:
@@ -279,7 +279,7 @@ def reward_function(slice_obs, slice_req, buffer, k={k_arr}):
 def reward_function(slice_obs, slice_req, buffer, k={k}):
     reward=0.0
 {codigo_indentado}
-    return reward, valores
+    return reward
 """
             else:
                 codigo_python = f"""import numpy as np
@@ -293,6 +293,7 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             with open(output_file, "w") as f:
                 f.write(codigo_python)
             #print(f"Função de recompensa salva como '{output_file}'.")
+            print(f"Função de recompensa gerada:\n{codigo_python}")
             return codigo_python, k
         except Exception as e:
             print(f"Erro ao criar a função de recompensa: {e}")
