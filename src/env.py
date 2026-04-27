@@ -156,24 +156,6 @@ class MobNet(Env):
         slice_obs: np.ndarray,
     ) -> float:
         
-        #if not self.llm_agent.existing_code():
-        #    #print("O código ainda não existe ou não foi encontrado.")
-        #    #TODO: Corrigir para considerar todos os casos.
-        #    # Para os casos 1, 2 e 3.
-        #    if self.case_num in [1, 2, 3]:
-        #        code = self.llm_agent.create_reward_function(self.intent,self.slice_req[:int(np.size(self.slice_req)/2)], self.k)
-        #        reward = self.llm_agent.run_reward_function(slice_obs[:int(np.size(slice_obs)/2)], self.slice_req[:int(np.size(self.slice_req)/2)], self.buffer, self.k)
-        #    else:
-        #        # Para o caso 4
-        #        code = self.llm_agent.create_reward_function(self.intent,self.slice_req, self.k)
-        #        reward = self.llm_agent.run_reward_function(slice_obs, self.slice_req, self.buffer, self.k) 
-        #else:
-        #    # Para os casos 1, 2 e 3.
-        #    if self.case_num in [1, 2, 3]:
-        #        reward = self.llm_agent.run_reward_function(slice_obs[:int(np.size(slice_obs)/2)], self.slice_req[:int(np.size(self.slice_req)/2)], self.buffer, self.k)
-        #    # Para o caso 4
-        #    else:
-        #        reward = self.llm_agent.run_reward_function(slice_obs, self.slice_req,self.buffer, self.k)
         if self.case_num in [1, 2, 3]:
             assert self.slice_req is not None, "slice_req cannot be None"
             mid_req = len(self.slice_req) // 2

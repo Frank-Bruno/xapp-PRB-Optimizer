@@ -170,7 +170,7 @@ class XappNori:
             SERVER_BASE_PORT = 9900
             self.env.reset()
             if self.test_mode:  # Testing
-                print("INFO: _______Starting Test Mode_____")
+                print("DEBUG: _______Starting Test Mode_____")
                 checkpoint_path = os.getenv("MODEL_CHECKPOINT_PATH", "/opt/rl-models/export/latest")
                 checkpoint_dir = Path(checkpoint_path)
                 if checkpoint_dir.exists():
@@ -184,7 +184,7 @@ class XappNori:
                     assert last_checkpoint is not None, "Last checkpoint is None"
                     self.algo = Algorithm.from_checkpoint(last_checkpoint)
             else:  # Training
-                print("INFO: _______Starting Training Mode_____")
+                print("DEBUG: _______Starting Training Mode_____")
                 self.client = PolicyClient(
                     f"http://{SERVER_ADDRESS}:{SERVER_BASE_PORT}",
                     inference_mode="local",
@@ -505,21 +505,6 @@ class XappNori:
                             slice_inst_thr.setdefault(slice_id,[]).append(inst_thr)
                             break
                 
-                #slice1_ues_thr = []
-                #slice2_ues_thr = []
-                #slice1_ues_lat = []
-                #slice2_ues_lat = []
-                #for ue_id, ue_thr in ues_thr:
-                #    if ue_id in self.slice_ues[1]:
-                #        slice1_ues_thr.append(ue_thr)
-                #    elif ue_id in self.slice_ues[2]:
-                #        #print(f"UE ID {ue_id} with throughput {ue_thr} added to slice 2 <-------------------------------")
-                #        slice2_ues_thr.append(ue_thr)
-                #for ue_id, ue_lat in ues_lat:
-                #    if ue_id in self.slice_ues[1]:
-                #        slice1_ues_lat.append(ue_lat)
-                #    elif ue_id in self.slice_ues[2]:
-                #        slice2_ues_lat.append(ue_lat)
 
                 if (len(slice_ues_thr)) == 0:
                 #if (len(slice1_ues_thr) + len(slice2_ues_thr)) == 0:
@@ -529,18 +514,7 @@ class XappNori:
                 print(f"DEBUG: slice_ues: {self.slice_ues}") 
                 print(f"DEBUG: slice_ues_thr: {slice_ues_thr}")
                 print(f"DEBUG: slice_inst_thr: {slice_inst_thr}")
-                #slice_avg_thr = []
-                #slice_avg_lat = []
-                #
-                #for slice_id in self.slice_ues:
-                #    slice_avg_thr.append(np.mean(slice_ues_thr[slice_id]))
-                #    slice_avg_lat.append(np.mean(slice_ues_lat[slice_id]))
 
-                
-                #slice_1_avg_thr = float(np.mean(slice1_ues_thr))
-                #slice_1_avg_lat = float(np.mean(slice1_ues_lat))
-                #slice_2_avg_thr = float(np.mean(slice2_ues_thr))
-                #slice_2_avg_lat = float(np.mean(slice2_ues_lat))
                 
                 if self.env.case_num in [1, 2, 3]:
                     obs = np.array([np.mean(slice_ues_thr[sid]) for sid in self.slice_ues] + 
