@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xappnori
+  namespace: ricxapp
+  labels:
+    app: xappnori
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xappnori
+  template:
+    metadata:
+      labels:
+        app: xappnori
+    spec:
+      containers:
+        - name: xappnori
+          image: YOUR_REGISTRY/xapp-prb-optimizer:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RAY_STORAGE
+              value: /opt/rl-models/ray_results
+            - name: MODEL_EXPORT_DIR
+              value: /opt/rl-models/export/latest
+            - name: RMR_SEED_RT
+              value: /opt/route/routes.rt
+            - name: CONFIG_FILE
+              value: /opt/ric/config/config-file.json
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: rmr
+              containerPort: 4560
+          volumeMounts:
+            - name: rl-models
+              mountPath: /opt/rl-models
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+      volumes:
+        - name: rl-models
+          persistentVolumeClaim:
+            claimName: rl-models-pvc

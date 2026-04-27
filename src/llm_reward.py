@@ -41,7 +41,7 @@ class LLMAgent:
             response = self.client.chat.completions.create(
                 model=self.MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
+                temperature=0.1,
             )
 
             content = None
@@ -103,7 +103,7 @@ class LLMAgent:
 
         2 - O segundo caso de uso de alocação de recursos tem por objetivo maximizar o desempenho de um dos slices e apenas cumprir o requisito dos outros, sem ultrapassar o valor do requisito. Para isso, a função de reward deve punir o agente se não for observado o exato valor do requisito, e deve recompensar o agente se o slice priorizado tiver o maior valor observado possível. Deve-se obter o índice do slice a ser priorizado a partir da descrição lógica.
 
-        3 - O terceiro caso de uso de alocação de recursos tem por objetivo economizar recursos e assim cumprir apenas o requisito de todos os slices. Nesse caso, a função de reward deve punir o agente por qualquer desvio entre o observado eos requisitos, a fim de que o excedente de recursos seja economizado.
+        3 - O terceiro caso de uso de alocação de recursos tem por objetivo economizar recursos e assim cumprir apenas o requisito de todos os slices. Nesse caso, a função de reward deve punir o agente por qualquer desvio entre o observado e os requisitos, a fim de que o excedente de recursos seja economizado.
         
         4 - O quarto caso de uso de alocação de recursos tem por objetivo otimizar o desempenho de todos os slices a partir de sua métrica de desempenho. Para isso, a função de reward deve recompensar o agente proporcialmente ao desempenho em relação ao requisito para cada slice. Além disso, a função deve atribuir um peso (+1) para slices de vazão e (-1) para slices de latência. 
 
@@ -113,9 +113,9 @@ class LLMAgent:
         
         Para o primeiro caso, a função de reward deve ser dada por uma variável reward que seja dada pela soma do mínimo entre 0 e a diferença ente dois arrays, slice_obs e slice_req, normalizada pelo slice_req. O resultado desse cálculo deve ser normalizado pela variável buffer do sistema.
         
-        Para o segundo caso, a função de reward deve ser dada por uma variável reward que seja dada pela soma do absoluto da diferença entre dois arrays normalizada, slice_obs e slice_req, normalizada pelo slice_req, com exceção de um elemento k. Esse elemento também é dado pela diferença normalizada, mas não deve ser incluído no absoluto e ser somado ao resto. O resultado desse cálculo deve ser normalizado pela negativo da variável buffer do sistema.
-        
-        Para o terceiro caso, a função de reward deve ser dada por uma variável reward que seja dada pela soma do absoluto da diferença entre dois arrays, slice_obs e slice_req, normalizada pelo slice_req. O resultado desse cálculo deve ser normalizado pela negativo da variável buffer do sistema.
+        Para o segundo caso, a função de reward deve ser dada em função de uma variável delta, calculada pela diferença entre os arrays slice_obs e slice_req. Também utiliza-se a variável k para indicar a posição em slice_obs do slice a ser priorizado. Iterando pelos elementos dos arrays, verifica-se simulataneamente se o elemento atual é diferente de k e se delta é menor que zero, entre 0 e 2 ou maior que dois. Caso seja menor que zero e o elemento atual diferente de k, a reward é dada por -3 vezes delta normalizado por um beuffer vezes a tangenete hiperbólica de delta (normalizado). Caso delta esteja entre 0 e 2 e o elemento atual seja diferente de k, o valor de reward é zero. Caso seja delta seja maior que 2 e o elemento atual diferente de k, a reward é dada por -1 vezes delta (normalizado) vezes tangente hiperbólica de delta (normalizado). Por fim, no caso de do elemento atual ser igual a k, a reward é dada pelo módulo de delta (normalizado) vezes a tangente hiperbólica de delta (normalizado). A função de reward feve ser dada pela soma dos rewards em cada posição dos vetores slice_obs e slice_req.
+                
+        Para o terceiro caso, a função de recompensa deve ser definida a partir da iteração simultânea sobre os arrays slice_obs e slice_req, calculando-se, para cada posição i, o erro como a diferença entre o valor observado e o valor requerido. A lógica de atribuição da recompensa segue três condições: se o valor observado for estritamente maior que o requisito somado a duas unidades, a recompensa para aquele índice é o produto do erro negativo pela tangente hiperbólica do erro subtraído de duas unidades; se o valor observado for maior que o requisito, mas não ultrapassar esse limite de duas unidades adicionais, o valor de recompensa adicionado é zero; caso o valor observado seja igual ou inferior ao requisito, a recompensa é calculada multiplicando-se a constante 3 pela tangente hiperbólica do erro e pelo valor negativo desse mesmo erro. A função deve retornar a soma total das recompensas acumuladas em todas as iterações.
         
         Para o quarto caso, a função de reward deve ser dada por uma variável reward que seja dada pela soma ponderada da razão entre dois arrays. slice_obs e slice_req, na qual os pesos são dados por um array k, o qual é só possui elementos +1 ou -1, indicados pelo tipo de métrica do slice. O resultado desse cálculo deve ser normalizado pela variável buffer do sistema.
 
@@ -293,7 +293,7 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             with open(output_file, "w") as f:
                 f.write(codigo_python)
             #print(f"Função de recompensa salva como '{output_file}'.")
-            print(f"Função de recompensa gerada:\n{codigo_python}")
+            print(f"DEBUG: Função de recompensa gerada:\n{codigo_python}")
             return codigo_python, k
         except Exception as e:
             print(f"Erro ao criar a função de recompensa: {e}")
@@ -389,10 +389,11 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             clean = ''.join(filter(str.isdigit, raw))
             case_num = (int(clean) if clean else -1)
             print(f"DEBUG: Caso classificado: {case_num}")
-            if case_num == 3:
-                return True
-            else:
-                return False
+            return case_num
+            #if case_num == 3:
+            #    return True
+            #else:
+            #    return False
         except Exception:
             print("Erro ao classificar a descrição lógica.")
             
@@ -449,10 +450,10 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
                 return slice_requirements
             else:
                 print("DEBUG: Formato inesperado na resposta.")
-                return None, None
+                return None#, None
         except Exception:
             print("DEBUG: Erro ao extrair os requisitos da descrição lógica.")
-            return None, None
+            return None#, None
 
     
 if __name__ == "__main__":
