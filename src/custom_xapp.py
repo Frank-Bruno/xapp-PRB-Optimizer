@@ -43,13 +43,13 @@ class XappNori:
         self.influx_url = "http://influxdb-influxdb2.influxdb.svc.cluster.local:8086"
         
         self.action_message = False
-        self.llm_agent = os.getenv("LLM_AGENT", "true").lower() in (
+        self.rl_agent = os.getenv("RL_AGENT", "true").lower() in (
             "1",
             "true",
             "yes",
             "on",
         )
-
+        self.scheduling_algorithm = os.getenv("SCHEDULING_ALGORITHM", "llm-scheduler").strip().lower()
         # Initializing a logger for the custom xApp instance in Debug level (logs everything)
         self.logger = Logger(
             name="XappNori", level=Level.DEBUG
@@ -85,7 +85,7 @@ class XappNori:
             #    2 : ["00006","00007",],
             #}}
             self.slice_ues = {}
-            self.env = MobNet(debug=True, slice_number=3, llm_mode=self.llm_agent)
+            self.env = MobNet(debug=True, slice_number=3, scheduling_algorithm=self.scheduling_algorithm)
             self.test_mode = os.getenv("RL_INFERENCE_ONLY", "false").lower() in (
                 "1",
                 "true",
@@ -93,8 +93,9 @@ class XappNori:
                 "on",
             )
             print(f"DEBUG: Test mode: {self.test_mode}")
+            print(f"DEBUG: Scheduling algorithm: {self.scheduling_algorithm}")
             if not self.test_mode:
-                self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 3, "debug": True, "llm_mode": self.llm_agent}, daemon=False)
+                self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 3, "debug": True, "scheduling_algorithm": self.scheduling_algorithm}, daemon=False)
                 self.env_thread.start()
 
 
@@ -473,7 +474,7 @@ class XappNori:
             ########### Interaction with RL Environment
             # Observation
             #TODO: coletar da porcentagem calculado pelo nori
-            ues_thr, ues_lat, sid_ue, inst_thr_ues = self.get_thr_data(ric_indication_data)
+            ues_thr, ues_lat, sid_ue, inst_thr_ues, buffer_occ_ues = self.get_thr_data(ric_indication_data)
             
             if not self.slice_ues and not sid_ue.get(0):
                 ord_slices = dict(sorted(sid_ue.items()))
@@ -485,7 +486,7 @@ class XappNori:
                 slice_ues_thr = {}
                 slice_ues_lat = {}
                 slice_inst_thr = {}
-                
+                slice_buffer_occ = {}
                 for ue_id, ue_thr in ues_thr:
                     for slice_id, ues_na_slice in self.slice_ues.items():
                         if ue_id in ues_na_slice:
@@ -505,18 +506,23 @@ class XappNori:
                             slice_inst_thr.setdefault(slice_id,[]).append(inst_thr)
                             break
                 
+                for ue_id, buffer_occ in buffer_occ_ues:
+                    for slice_id, ues_na_slice in self.slice_ues.items():
+                        if ue_id in ues_na_slice:
+                            slice_buffer_occ.setdefault(slice_id,[]).append(buffer_occ)
+                            break
 
                 if (len(slice_ues_thr)) == 0:
                 #if (len(slice1_ues_thr) + len(slice2_ues_thr)) == 0:
                     # self.logger.warning("No UEs in the slices.")
                     # print(f"\n\n\n\n\n#########################\n{ric_indication_data}\n#########################\n\n\n\n\n")
                     return
-                print(f"DEBUG: slice_ues: {self.slice_ues}") 
-                print(f"DEBUG: slice_ues_thr: {slice_ues_thr}")
-                print(f"DEBUG: slice_inst_thr: {slice_inst_thr}")
-
+                #print(f"DEBUG: slice_ues: {self.slice_ues}") 
+                #print(f"DEBUG: slice_ues_thr: {slice_ues_thr}")
+                #print(f"DEBUG: slice_inst_thr: {slice_inst_thr}")
+                #print(f"DEBUG: slice_buffer_occ: {slice_buffer_occ}")
                 
-                if self.env.case_num in [1, 2, 3]:
+                if self.env.case_num in [1, 2, 3]: #TODO: modificar para os outros baselines
                     obs = np.array([np.mean(slice_ues_thr[sid]) for sid in self.slice_ues] + 
                                    [np.mean(slice_ues_lat[sid]) for sid in self.slice_ues])
                 else:
@@ -528,6 +534,7 @@ class XappNori:
                 obs = np.nan_to_num(obs, nan=0)  # Replace NaN with 0
 
                 inst_slice_avg_thr = [np.mean(slice_inst_thr[sid]) for sid in self.slice_ues]
+                mean_buffer_occ = [np.mean(slice_buffer_occ[sid]) for sid in self.slice_ues]
 
                 if self.test_mode:  # Testing
                     action = self.algo.compute_single_action(obs, explore=False)
@@ -539,8 +546,10 @@ class XappNori:
 
                 self.env.set_obs(obs)
                 self.env.set_inst_thr(inst_slice_avg_thr)
+                self.env.set_buffer_occ(mean_buffer_occ)
                 print("DEBUG: obs", obs)
                 print("DEBUG: inst_slice_avg_thr", inst_slice_avg_thr)
+                print("DEBUG: mean_buffer_occ", mean_buffer_occ)
 
                 if self.action_message:
                     #self.action_message = True
@@ -556,15 +565,15 @@ class XappNori:
                 else:
                     self.action_message = True
                 print("")
-                if self.llm_agent:                    
+                if self.rl_agent or self.scheduling_algorithm == "sched-scheduler": 
                     self.perc_action = self.env.generate_action(action)
-                else:
+                elif self.scheduling_algorithm == "proportional-fair":
                     self.perc_action = self.env.proportional_fair_schedule()
                     #random_action = np.random.randint(10,100)
                     #perc_action = np.array([random_action, 100-random_action])
                 #print("##########################################")
-                print("DEBUG: new perc_action:", self.perc_action )
-                print("DEBUG: current state:", obs)
+                #print("DEBUG: new perc_action:", self.perc_action )
+                #print("DEBUG: current state:", obs)
                 #print("##########################################")
                 #self.env.set_obs(obs)
                 #if not self.action_message:
@@ -670,6 +679,8 @@ class XappNori:
         cell_object_id = data['indicationMessage'][1]['cellObjectID']
         thr_ues = []
         lat_ues = []
+        buffer_occ_ues = []
+        packet_loss_ues = []
         sid_ue = {}
         req_thr_ues = []#{sst_id: [] for sst_id in range(1, 4)} #TODO: handle dynamic slices
         # UE-level PM info
@@ -694,14 +705,22 @@ class XappNori:
                         ue_thr = float(pm_val[0] * math.pow(pm_val[1], pm_val[2]))/1000 # Mbps
                         #ue_thr = float(pm_val)/1000 # Mbps
                         req_thr_ues.append((ue_id, ue_thr))
+                    elif pm_type == "DRB.BufferSize.Qos.UEID":
+                        #print("DEBUG:-----> Buffer Occupancy PM value: ", pm_val)
+                        #ue_buffer_occ = float(pm_val[0] * math.pow(pm_val[1], pm_val[2]))
+                        buffer_occ_ues.append((ue_id, pm_val))
+                    elif pm_type == "DRB.PktLossRateDl.UEID":
+                        ue_pkt_loss = float(pm_val[0] * math.pow(pm_val[1], pm_val[2]))
+                        packet_loss_ues.append((ue_id, ue_pkt_loss))
 
 
-
-        print("DEBUG:-->get sid_ue:", sid_ue)
-        print("DEBUG:-->get thr_ues:", thr_ues)
-        print("DEBUG:-->get lat_ues:", lat_ues)
-        print("DEBUG:-->get req_thr_ues:", req_thr_ues)
-        return thr_ues, lat_ues, sid_ue, req_thr_ues
+        #print("DEBUG:-->get sid_ue:", sid_ue)
+        #print("DEBUG:-->get thr_ues:", thr_ues)
+        #print("DEBUG:-->get lat_ues:", lat_ues)
+        #print("DEBUG:-->get req_thr_ues:", req_thr_ues)
+        #print("DEBUG:-->get buffer_occ_ues:", buffer_occ_ues)
+        #print("DEBUG:-->get packet_loss_ues:", packet_loss_ues)
+        return thr_ues, lat_ues, sid_ue, req_thr_ues, buffer_occ_ues
 
     def send_ran_slicing_control(
         self, slices_id: dict, action: np.ndarray, max_rbs:int, rmrxapp: RMRXapp, summary: dict, sbuf

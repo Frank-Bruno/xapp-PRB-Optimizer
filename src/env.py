@@ -23,12 +23,12 @@ import csv
 from datetime import datetime
 
 class MobNet(Env):
-    def __init__(self, slice_number=3, env_config=None, debug=False, llm_mode=True):
+    def __init__(self, slice_number=3, env_config=None, debug=False, scheduling_algorithm="llm-scheduler"):
         super(MobNet, self).__init__()
         self.llm_agent = LLMAgent()
         self.intent = """
-            Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 30, 15 e 5 Mbps, respectivamente.
-            Deseja-se cumprir os requisitos e não há interesse em economia de recursos.
+            Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 50, 20 e 10 Mbps, respectivamente.
+            Deseja-se cumprir os requisitos do primeiro e segundo slice, sem ultrapassá-los ou ficar abaixo, para maximizar o desempenho no terceiro slice, no qual é desejado que o desempeno seja o maior possível.
             """
         self.case_num = self.llm_agent.get_classification_prompt(self.intent) 
         self.save_energy = True if self.case_num == 3 else False
@@ -56,10 +56,12 @@ class MobNet(Env):
         self.slice_obs_hist = [deque(maxlen=self.obs_window) for _ in range(self.slice_number)]
 
         self.slice_obs_avg = np.zeros(self.slice_number, dtype=np.float64)
-        self.llm_mode = llm_mode
-        print("DEBUG: LLM Mode:", self.llm_mode)
+        #self.llm_mode = llm_mode
+        self.scheduling_algorithm = scheduling_algorithm
+        #print("DEBUG: LLM Mode:", self.llm_mode)
+        print("DEBUG: Scheduling Algorithm:", self.scheduling_algorithm)
         
-        self.csv_file = "caso_1_test_6.csv"
+        self.csv_file = "caso_2_infer_3.csv"
         if not os.path.exists(self.csv_file):
             with open(self.csv_file, mode="w", newline="") as f:
                 writer = csv.writer(f)
@@ -88,10 +90,14 @@ class MobNet(Env):
         #    Deseja-se cumprir os requisitos, mas há interesse em economia de recursos.
         #    """
     def step(self, action):
-        if self.llm_mode:
+        if self.scheduling_algorithm == "llm-scheduler":
             reward = self.calculate_reward(self.obs)
-        else:
+        elif self.scheduling_algorithm == "proportional-fair":
             reward = 1
+        elif self.scheduling_algorithm == "sched-scheduler":
+            reward = self.sched_slicing(self.obs)
+        elif self.scheduling_algorithm == "lls-scheduler":
+            reward = self.lower_level_scheduling(self.obs)
         terminated, truncated = False, False
         
         timestamp = datetime.utcnow().isoformat()
@@ -121,7 +127,7 @@ class MobNet(Env):
         return self.obs, reward, terminated, truncated, {}
     
     def generate_action(self, action):
-        print("DEBUG: -----> save energy:", self.save_energy)
+        #print("DEBUG: -----> save energy:", self.save_energy)
         if self.save_energy:
             max_rbs_rate = action[-1]
             self.max_rbs_rate = max_rbs_rate
@@ -151,6 +157,9 @@ class MobNet(Env):
     def set_inst_thr(self, inst_thr):
         self.slice_inst_thr = inst_thr
 
+    def set_buffer_occ(self, buffer_occ):
+        self.slice_buffer_occ = buffer_occ
+
     def calculate_reward(
         self,
         slice_obs: np.ndarray,
@@ -172,6 +181,24 @@ class MobNet(Env):
         reward = self.llm_agent.run_reward_function(current_obs, current_req, self.buffer, self.k)
      
         assert isinstance(reward, float)
+        return reward
+    
+    def sched_slicing(self, slice_obs):
+        packet_size = 1400 #TODO coletar do ambiente
+        max_buffer_size = 20480 #TODO coletar do ambiente
+        reward = slice_obs[0] + slice_obs[1] - self.slice_buffer_occ[2]*max_buffer_size*packet_size
+        return reward
+    
+    def lower_level_scheduling(self, slice_obs):
+        #TODO definir pesos
+        w_bo = [1, 1, 2] #w_bo buffer occupancy,
+        w_t = [2*(10**-4), 2*(10**-4), 4*(10**-4)] #w_t throughput 
+        
+        max_buffer_size = 20480
+        buffer_norm = self.slice_buffer_occ / max_buffer_size
+        reward = 0.0
+        for i in range(self.slice_number): #TODO normalizar buffer occupancy 
+            reward += w_t[i]*np.exp(slice_obs[i]) + w_bo[i]*np.exp(-buffer_norm[i])
         return reward
     
     def proportional_fair_allocation(self, slice_obs, slice_obs_avg):
@@ -202,8 +229,8 @@ class MobNet(Env):
             #else:
             #    self.slice_obs_avg[i] = (1 - self.ewma_alpha) * self.slice_obs_avg[i] + self.ewma_alpha * val
             self.slice_obs_avg[i] = np.mean(list(self.slice_obs_hist[i]))
-        print(f"DEBUG: Slice hist: {self.slice_obs_hist}")
-        print(f"DEBUG: Slice Obs Avg:{self.slice_obs_avg}")    
+        #print(f"DEBUG: Slice hist: {self.slice_obs_hist}")
+        #print(f"DEBUG: Slice Obs Avg:{self.slice_obs_avg}")    
         return self.slice_obs_avg
 
 
@@ -304,14 +331,14 @@ def client_rl(test_mode: bool = False):
                 break
 
 
-def server_rl(slice_number=3, env_config=None, debug=False, llm_mode=True):
+def server_rl(slice_number=3, env_config=None, debug=False, llm_mode=True, scheduling_algorithm="llm-scheduler"):
     SERVER_ADDRESS = "localhost"
     SERVER_BASE_PORT = 9900
     RAY_STORAGE = os.getenv("RAY_STORAGE", "/opt/rl-models/ray_results")
     AGENT_NAME = "oai_ppo"
     EPISODES_TOTAL = 100000
     DEBUG_MODE = False
-    env = MobNet(slice_number=slice_number, debug=debug, llm_mode=llm_mode)
+    env = MobNet(slice_number=slice_number, debug=debug, scheduling_algorithm=scheduling_algorithm)
     os.makedirs(RAY_STORAGE, exist_ok=True)
     ray_storage = str(Path(RAY_STORAGE).resolve())
     export_dir = os.getenv("MODEL_EXPORT_DIR", "/opt/rl-models/export/latest")

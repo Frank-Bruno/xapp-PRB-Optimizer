@@ -8,23 +8,37 @@ mode="$(echo "${MODE:-train}" | tr '[:upper:]' '[:lower:]')"
 case "$mode" in
     train)
         rl_inference_only="false"
-        llm_agent="true"
+        rl_agent="true"
+        scheduling_algorithm="llm-scheduler"
         ;;
     infer)
         rl_inference_only="true"
-        llm_agent="true"
+        rl_agent="true"
+        scheduling_algorithm="llm-scheduler"
         ;;
     pf|proportional_fair|proportional-fair)
         rl_inference_only="false"
-        llm_agent="false"
+        rl_agent="false"
+        scheduling_algorithm="proportional-fair"
         ;;
     llm)
         rl_inference_only="false"
-        llm_agent="true"
+        rl_agent="true"
+        scheduling_algorithm="llm-scheduler"
+        ;;
+    sched_slice)
+        rl_inference_only="true"
+        rl_agent="true"
+        scheduling_algorithm="sched-scheduler"
+        ;;
+    lls_scheduler)
+        rl_inference_only="true"
+        rl_agent="true"
+        scheduling_algorithm="lls-scheduler"
         ;;
     *)
         echo "ERROR: invalid MODE '$mode'."
-        echo "Use one of: train | infer | llm | pf | proportional_fair "
+        echo "Use one of: train | infer | llm | pf | proportional_fair | sched_slice | lls_scheduler"
         exit 1
         ;;
 esac
@@ -36,7 +50,8 @@ echo "xapp_name=$xapp_name"
 echo "deployment_name=$deployment_name"
 echo "mode=$mode"
 echo "rl_inference_only=$rl_inference_only"
-echo "llm_agent=$llm_agent"
+echo "rl_agent=$rl_agent"
+echo "scheduling_algorithm=$scheduling_algorithm"
 
 echo "----------------- Ensuring PVC for RL models -----------------"
 kubectl apply -f k8s/rl-models-pv.yaml
@@ -130,7 +145,8 @@ patch_payload=$(cat <<EOF
                             {"name": "MODEL_EXPORT_DIR", "value": "/opt/rl-models/export/latest"},
                             {"name": "RL_INFERENCE_ONLY", "value": "$rl_inference_only"},
                             {"name": "MODEL_CHECKPOINT_PATH", "value": "$model_checkpoint_path"},
-                            {"name": "LLM_AGENT", "value": "$llm_agent"}
+                            {"name": "RL_AGENT", "value": "$rl_agent"},
+                            {"name": "SCHEDULING_ALGORITHM", "value": "$scheduling_algorithm"}
                         ],
                         "volumeMounts": [
                             {"name": "rl-models", "mountPath": "/opt/rl-models"}
