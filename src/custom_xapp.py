@@ -528,7 +528,7 @@ class XappNori:
                 else:
                     #TODO:Testar para o caso 4
                     obs = np.array([(np.mean(slice_ues_thr[sid]), 
-                                     np.mean(slice_ues_lat[sid]))for sid in self.slice_ues]).flatten()
+                                     np.mean(slice_buffer_occ[sid]))for sid in self.slice_ues]).flatten()
                     #obs = np.array([slice_1_avg_thr, slice_1_avg_lat, slice_2_avg_thr, slice_2_avg_lat])
                 #print(f"DEBUG: Obs_atual: {obs}")
                 obs = np.nan_to_num(obs, nan=0)  # Replace NaN with 0
@@ -692,7 +692,7 @@ class XappNori:
                     #print("DEBUG: PM info: ", pm_info)
                     pm_val_type, pm_val = pm_info['pmVal']
                     if pm_type == "QosFlow.PdcpPduVolumeDL_Filter.UEID":
-                        ue_thr = (2*5*float(pm_val))/1000 # Mbps
+                        ue_thr = (2*50*float(pm_val))/1000 # Mbps
                         thr_ues.append((ue_id, ue_thr))
                     elif pm_type == "DRB.AvgRlcLatencyDl.UEID":
                         # print("Here is the pm_val: ", pm_val)

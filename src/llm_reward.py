@@ -6,6 +6,8 @@ import traceback
 import importlib.util
 from pathlib import Path
 import numpy as np
+from crewai import Agent, Crew, Process, Task, LLM
+
 
 env_path = Path("/tmp/src/.env") #path to .env file with OPENAI_API_KEY
 load_dotenv(dotenv_path=env_path)
@@ -35,7 +37,8 @@ class LLMAgent:
             str: A linha de código Python gerada, ou None em caso de falha.
         """
 
-        prompt = self.criar_prompt(descricao_logica_recompensa)
+        #prompt = self.criar_prompt(descricao_logica_recompensa)
+        prompt = self.prompt_test(descricao_logica_recompensa)
 
         try:
             response = self.client.chat.completions.create(
@@ -73,7 +76,7 @@ class LLMAgent:
                  print("Erro: O LLM retornou uma resposta vazia ou inválida.")
                  return None
 
-            print(f"Código de recompensa gerado: {codigo_final}")
+            print(f"Código de recompensa gerado:\n{codigo_gerado}")
             return codigo_final
 
         except Exception as e:
@@ -299,7 +302,7 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             print(f"Erro ao criar a função de recompensa: {e}")
 
     
-    def run_reward_function(self, slice_obs, slice_req, buffer, k=None):
+    def run_reward_function(self, slice_obs, slice_req, buffer):
         """
         Executa a função de recompensa carregando o módulo gerado e chamando a função.
         Retorna o valor de reward (ou None em caso de erro).
@@ -326,7 +329,7 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             print(f"DEBUG: obs_arr={obs_arr}")
             print(f"DEBUG: slice_req_arr={slice_req_arr}")
 
-            resultado = module.reward_function(obs_arr, slice_req_arr, buffer, k)
+            resultado = module.reward_function(obs_arr, slice_req_arr, buffer)
             #print("DEBUG: Resultado da função de recompensa:", resultado)
             return resultado
 
@@ -451,24 +454,116 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             else:
                 print("DEBUG: Formato inesperado na resposta.")
                 return None#, None
-        except Exception:
-            print("DEBUG: Erro ao extrair os requisitos da descrição lógica.")
+        except Exception as e:
+            print(f"DEBUG: Erro ao extrair os requisitos da descrição lógica: {e}")
             return None#, None
+        
+        ##### TESTANDO NOVA ESTRUTURA ######
+    def agent_pipeline(self, descricao_logica: str):
+        """
+        Pipeline de agentes para gerar, validar e formatar a função de recompensa."""
+        
+        llm = LLM(model=self.MODEL, temperature=0.2, api_key=api_key)
+        # 1. CONFIGURAÇÃO DOS AGENTES
+        especialista_rl = Agent(
+            role='Especialista em Reinforcement Learning e Telecomunicações',
+            goal='Traduzir solicitações de operadores de rede (RAN) em lógicas precisas de cálculo de recompensa (Reward Functions) em Python.',
+            backstory='Você é um engenheiro de telecomunicações especialista em 5G/6G Network Slicing e Reinforcement Learning. Você entende profundamente os 4 casos de uso de alocação de recursos (1: Cumprir requisito, 2: Maximizar um slice, 3: Economizar recursos, 4: Otimizar todos com pesos).',
+            verbose=True,
+            llm=llm
+        )
 
-    
+        revisor_qa = Agent(
+            role='Engenheiro de Validação de Código RL',
+            goal='Garantir que a função gerada atende estritamente às regras de variáveis, buscar erros conceituais de reward shaping e possui a assinatura correta.',
+            backstory='Você é um QA meticuloso. Sua função é receber o código do especialista em RL e verificar se: 1) A função se chama "reward_function". 2) Ela recebe exatamente os parâmetros (slice_obs, slice_req, buffer). 3) A variável "reward" é inicializada em 0.0 e retornada no final. Se houver erro, você corrige o código.',
+            verbose=True,
+            llm=llm
+        )
+
+        formatador_saida = Agent(
+            role='Formatador de Scripts Python',
+            goal='Extrair apenas o código Python funcional, removendo qualquer conversa do modelo.',
+            backstory='Você é o guardião do arquivo final. Você não avalia lógica. Sua única função é remover saudações, explicações e marcadores Markdown (como ```python e ```). O resultado deve ser apenas o código puro.',
+            verbose=True,
+            llm=llm
+        )
+
+        # 2. CONFIGURAÇÃO DAS TAREFAS
+        # A tarefa 1 recebe as regras lógicas e usa o placeholder {descricao_logica}
+        tarefa_gerar_reward = Task(
+            description='''A partir da solicitação do operador: "{descricao_logica}", identifique qual dos 4 casos de uso de Network Slicing se aplica e crie a lógica.
+
+        Casos de Uso:
+            1 - O primeiro caso de uso de alocação de recursos tem por objetivo cumprir todos os requisitos, podendo ultrapassar os requisitos de cada slice de rede. Nesse caso, a função de reward deve focar em punir o agente não cumprir o requisito mas não leva em consideração se os slices ultrapassam o requisito.
+            2 - O segundo caso de uso de alocação de recursos tem por objetivo maximizar o desempenho de um dos slices e apenas cumprir o requisito dos outros, sem ultrapassar o valor do requisito. Para isso, a função de reward deve punir o agente se não for observado o valor do requisito, e assim recompensar o agente se o slice priorizado tiver o maior valor observado possível. 
+            3 - O terceiro caso de uso de alocação de recursos tem por objetivo economizar recursos e assim cumprir apenas o requisito de todos os slices. Nesse caso, a função de reward deve punir o agente por qualquer desvio entre o observado e os requisitos, a fim de que o excedente de recursos seja economizado.
+            4 - O quarto caso de uso de alocação de recursos tem por objetivo otimizar o desempenho de todos os slices a partir de sua métrica de desempenho. Para isso, a função de reward deve recompensar o agente proporcialmente ao desempenho em relação ao requisito para cada slice. Além disso, a função deve atribuir um peso (+1) para slices de vazão e (-1) para slices de latência. 
+
+        Variáveis Disponíveis para a equação:**
+            * `reward` (float): A variável de recompensa (inicializada em 0.0).
+            * `slice_obs` (np.ndarray): O array de observações atuais de throughput.
+            * `slice_req` (np.ndarray): O array de requisitos mínimos.
+        Gere a função Python.''',
+            expected_output='O código Python inicial implementando a função de reward.',
+            agent=especialista_rl
+        )
+
+        tarefa_validar_codigo = Task(
+            description='''Analise a função gerada pela tarefa anterior.
+        Regras obrigatórias:
+        - O nome da função DEVE ser: def reward_function(slice_obs, slice_req, buffer):
+        - O código deve inicializar reward = 0.0 e retornar reward no final.
+        - Verifique se a lógica matemática reflete um dos 4 casos de uso.
+        - Verifique se a função utiliza de gradiente descendente como uma forma de facilitar a convergência do agente, ou seja, se o código pune o agente proporcionalmente ao erro cometido,ou seja, de forma não linear.
+        - Verifique se a função é sensível a desvios, ou seja, o agente deve punir mais severamente os desvios abaixo dos requisitos do que os desvios acima dos requisitos, a fim de incentivar o agente a cumprir os requisitos.
+        - Não utilize normalização dos dados na função, use valores brutos.
+        - Considere valores de tolerância (eps) de 2Mbps, *apenas acima dos requisitos*, para facilitar a convergência do agente, ou seja, se o slice estiver dentro de 2Mbps do requisito, considere que o slice está cumprindo o requisito.
+        - Buscar erros comuns de reward shaping, como: não punir o agente por não cumprir requisitos.
+        Corrija qualquer anomalia e retorne o código completo corrigido.''',
+            expected_output='O código Python validado e corrigido.',
+            agent=revisor_qa
+        )
+
+        tarefa_limpar_formato = Task(
+            description='''Pegue o código validado. Remova formatações Markdown e textos extras. Deixe apenas o código Python executável e comentários.
+            Apenas a função reward_function e suas dependências/comentários devem permanecer.''',
+            expected_output='Apenas as linhas de código Python.',
+            agent=formatador_saida,
+            output_file=self.code_name # Salva automaticamente
+        )
+
+        # 3. CRIAÇÃO DA EQUIPE E EXECUÇÃO
+        equipe_rl = Crew(
+            agents=[especialista_rl, revisor_qa, formatador_saida],
+            tasks=[tarefa_gerar_reward, tarefa_validar_codigo, tarefa_limpar_formato],
+            process=Process.sequential
+        )
+
+        print("Iniciando a geração da função de reward...")
+
+        # O dicionário 'inputs' mapeia a variável para dentro das Tasks
+        resultado = equipe_rl.kickoff(inputs={"descricao_logica": descricao_logica}
+        )
+        
 if __name__ == "__main__":
     
     agent = LLMAgent()
     
     descricao_teste_caso = """
-    Considere uma rede com 2 slices, com suas métricas de performance sendo vazão de dados. 
-    Deseja-se otimizar a performance dos dois slices simultaneamente.
+    Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 50, 20 e 10 Mbps, respectivamente.
+    Deseja-se cumprir os requisitos do primeiro e segundo slice, sem ultrapassá-los ou ficar abaixo, para maximizar o desempenho no terceiro slice, no qual é desejado que o desempeno seja o maior possível.
     """
+    #generate_code = agent.llm_reward_agent(descricao_teste_caso)
+    #print(f"{generate_code}")
+    #create_code = agent.create_reward_function(descricao_teste_caso, [50, 20, 10], 2)
     slice_requirements = agent.get_requiriments(descricao_teste_caso)
-    get_case = agent.get_classification_prompt(descricao_teste_caso)
     print(f"\n[Resultado] Código de requisitos extraído: {slice_requirements}")
-    k = agent.k_type(descricao_teste_caso, slice_requirements)
-    print(f"\n[Resultado] k extraído: {k}")
+    resultado = agent.agent_pipeline(descricao_teste_caso)
+    #get_case = agent.get_classification_prompt(descricao_teste_caso)
+    #print(f"\n[Resultado] Código de requisitos extraído: {slice_requirements}")
+    #k = agent.k_type(descricao_teste_caso, slice_requirements)
+    #print(f"\n[Resultado] k extraído: {k}")
     #codigo_recompensa, k_indice = agent.create_reward_function(descricao_teste_caso, slice_requirements, k)
     #case_num = agent.get_classification_prompt(descricao_teste_caso)
     #print(f"\n[Resultado] Código gerado: {codigo_recompensa}")

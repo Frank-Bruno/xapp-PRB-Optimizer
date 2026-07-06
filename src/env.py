@@ -28,7 +28,7 @@ class MobNet(Env):
         self.llm_agent = LLMAgent()
         self.intent = """
             Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 50, 20 e 10 Mbps, respectivamente.
-            Deseja-se cumprir os requisitos do primeiro e segundo slice, sem ultrapassá-los ou ficar abaixo, para maximizar o desempenho no terceiro slice, no qual é desejado que o desempeno seja o maior possível.
+            Deseja-se cumprir os requisitos, mas há interesse em economia de recursos.
             """
         self.case_num = self.llm_agent.get_classification_prompt(self.intent) 
         self.save_energy = True if self.case_num == 3 else False
@@ -61,7 +61,7 @@ class MobNet(Env):
         #print("DEBUG: LLM Mode:", self.llm_mode)
         print("DEBUG: Scheduling Algorithm:", self.scheduling_algorithm)
         
-        self.csv_file = "caso_2_infer_3.csv"
+        self.csv_file = "caso_2_train_6.csv"
         if not os.path.exists(self.csv_file):
             with open(self.csv_file, mode="w", newline="") as f:
                 writer = csv.writer(f)
@@ -86,9 +86,12 @@ class MobNet(Env):
         #    """
         #4°Caso
         #    """
-        #    Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 30, 15 e 5 Mbps, respectivamente.
-        #    Deseja-se cumprir os requisitos, mas há interesse em economia de recursos.
+        #    Considere uma rede com 3 slices, com o primeiro e segundo slices tendo suas métricas de performance sendo vazão de dados, e o terceiro slice tendo sua métrica de performance sendo latência. 
+        #    Deseja-se otimizar a performance dos três slices simultaneamente.
         #    """
+        #    Considere uma rede com 3 slices, com o primeiro e segundo slices tendo suas métricas de performance sendo vazão de dados, e o terceiro slice tendo sua métrica de performance sendo latência. 
+        #    Os requisitos de throughput para cada slice são: 50, 20 e 10 Mbps, respectivamente.
+        #    Deseja-se otimizar a performance dos três slices simultaneamente.
     def step(self, action):
         if self.scheduling_algorithm == "llm-scheduler":
             reward = self.calculate_reward(self.obs)
@@ -177,8 +180,10 @@ class MobNet(Env):
             current_obs = slice_obs
             
         if not self.llm_agent.existing_code():
-            code = self.llm_agent.create_reward_function(self.intent, current_req, self.k)
-        reward = self.llm_agent.run_reward_function(current_obs, current_req, self.buffer, self.k)
+            code = self.llm_agent.agent_pipeline(self.intent)
+        #    code = self.llm_agent.create_reward_function(self.intent, current_req, self.k)
+        
+        reward = self.llm_agent.run_reward_function(current_obs, current_req, self.buffer)
      
         assert isinstance(reward, float)
         return reward
