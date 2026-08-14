@@ -15,30 +15,30 @@ load_dotenv(dotenv_path=env_path)
 class LLMAgent:
     
     def __init__(self):
-        self.code_name = "./reward_function.py"
+        self.code_name = "/opt/rl-models/reward_function.py" #"./reward_function.py"
         self.code_path = Path(self.code_name).resolve()
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            print("Erro: A variável de ambiente 'OPENAI_API_KEY' não foi encontrada.")
+            print("Error: the environment variable 'OPENAI_API_KEY' was not found.")
 
         self.client = OpenAI(api_key=api_key)
         self.MODEL = "gpt-5.2"
     
     def llm_reward_agent(self, descricao_logica_recompensa: str):
         """
-        Recebe uma DESCRIÇÃO da lógica de recompensa, consulta o LLM 
-        e retorna a linha de código Python correspondente.
-        
+        Receives a reward logic description, queries the LLM,
+        and returns the corresponding Python code line.
+
         Args:
-            descricao_logica_recompensa (str): O texto que descreve a lógica.
-                                                Ex: "penalizar pela média do déficit percentual"
-        
+            descricao_logica_recompensa (str): The text describing the logic.
+                                              Example: "penalize based on the average percentage deficit"
+
         Returns:
-            str: A linha de código Python gerada, ou None em caso de falha.
+            str: The generated Python code line, or None if it fails.
         """
 
-        #prompt = self.criar_prompt(descricao_logica_recompensa)
-        prompt = self.prompt_test(descricao_logica_recompensa)
+        prompt = self.criar_prompt(descricao_logica_recompensa)
+        #prompt = self.prompt_test(descricao_logica_recompensa)
 
         try:
             response = self.client.chat.completions.create(
@@ -56,96 +56,90 @@ class LLMAgent:
                 content = None
 
             if not content:
-                print("Erro: não foi possível extrair conteúdo da resposta do LLM.")
-                print("Resposta bruta:", response)
+                print("Error: could not extract content from the LLM response.")
+                print("Raw response:", response)
                 return None
-            
-            # Extrair o código Python da resposta
+
+            #Extract the Python code from the response
             match = re.search(r'```(?:python\n)?(.*?)\n?```', content, re.DOTALL)
-            
+
             if match:
                 codigo_gerado = match.group(1).strip()
             else:
-                # Se não houver ```, assume que a resposta inteira é o código
                 codigo_gerado = content.strip()
 
-            # Pega a primeira linha do código gerado (conforme lógica original)
             codigo_final = codigo_gerado.split('\n')[0].strip()
-            
-            if not codigo_final:
-                 print("Erro: O LLM retornou uma resposta vazia ou inválida.")
-                 return None
 
-            print(f"Código de recompensa gerado:\n{codigo_gerado}")
+            if not codigo_final:
+                print("Error: the LLM returned an empty or invalid response.")
+                return None
+
+            print(f"Generated reward code:\n{codigo_gerado}")
             return codigo_final
 
         except Exception as e:
-            print(f"Ocorreu um erro: {e}")
-            print(f"Resposta bruta recebida: {content if 'content' in locals() else 'N/A'}")
+            print(f"An error occurred: {e}")
+            print(f"Raw response received: {content if 'content' in locals() else 'N/A'}")
             return None
 
     def criar_prompt(self, descricao_logica: str):
         """
-        Cria o prompt estruturado para o LLM, inserindo a lógica
-        de recompensa desejada.
+        Creates the structured prompt for the LLM by inserting the desired reward logic.
         """
-        
+
         prompt_template = f"""
-        Você é um especialista em Reinforcement Learning aplicado a Redes de Acesso Rádio (RAN) e network slicing.
-        Sua tarefa é definir qual caso de uso utilizar de acordo com a lógica de descrição fornecida
-        e em seguida gerar **apenas** o código Python que implementa uma lógica de cálculo de recompensa.
-        
-        **Variáveis Disponíveis no Escopo:**
-        * `reward` (float): A variável de recompensa (inicializada em 0.0).
-        * `slice_obs` (np.ndarray): O array de observações atuais.
-        * `slice_req` (np.ndarray): O array de requisitos mínimos.
-        * `k` (int): Indice do elemento a ser maximizado, quando necessário.
+        You are an expert in Reinforcement Learning applied to Radio Access Networks (RAN) and network slicing.
+        Your task is to determine which use case to use according to the provided logic description
+        and then generate only the Python code that implements a reward calculation logic.
 
-        **Casos de uso**
-        1 - O primeiro caso de uso de alocação de recursos tem por objetivo cumprir todos os requisitos, podendo ultrapassar os requisitos de cada slice de rede. Nesse caso, a função de reward deve focar em punir o agente não cumprir o requisito mas não leva em consideração se os slices ultrapassam o requisito.
+        **Variables Available in Scope:**
+        * `reward` (float): The reward variable (initialized to 0.0).
+        * `slice_obs` (np.ndarray): The current observation array.
+        * `slice_req` (np.ndarray): The minimum requirement array.
+        * `k` (int): Index of the element to be maximized when necessary.
 
-        2 - O segundo caso de uso de alocação de recursos tem por objetivo maximizar o desempenho de um dos slices e apenas cumprir o requisito dos outros, sem ultrapassar o valor do requisito. Para isso, a função de reward deve punir o agente se não for observado o exato valor do requisito, e deve recompensar o agente se o slice priorizado tiver o maior valor observado possível. Deve-se obter o índice do slice a ser priorizado a partir da descrição lógica.
+        **Use Cases**
+        1 - The first resource allocation use case aims to satisfy all requirements, possibly exceeding the requirements of each network slice. In this case, the reward function should focus on penalizing the agent for not meeting the requirement but does not consider whether the slices exceed the requirement.
 
-        3 - O terceiro caso de uso de alocação de recursos tem por objetivo economizar recursos e assim cumprir apenas o requisito de todos os slices. Nesse caso, a função de reward deve punir o agente por qualquer desvio entre o observado e os requisitos, a fim de que o excedente de recursos seja economizado.
-        
-        4 - O quarto caso de uso de alocação de recursos tem por objetivo otimizar o desempenho de todos os slices a partir de sua métrica de desempenho. Para isso, a função de reward deve recompensar o agente proporcialmente ao desempenho em relação ao requisito para cada slice. Além disso, a função deve atribuir um peso (+1) para slices de vazão e (-1) para slices de latência. 
+        2 - The second resource allocation use case aims to maximize the performance of one of the slices while only meeting the requirements of the others, without exceeding the required value. To do this, the reward function should penalize the agent if the exact required value is not observed, and should reward the agent if the prioritized slice has the highest observed value possible. The index of the slice to be prioritized must be obtained from the logical description.
 
-        
-        **Tarefa:**
-        Dada a descrição lógica, faça o mapeamento da descrição em um dos casos de uso e gere uma função de reward para um agente de apredizado por reforço para alocação de recursos desse caso.
-        
-        Para o primeiro caso, a função de reward deve ser dada por uma variável reward que seja dada pela soma do mínimo entre 0 e a diferença ente dois arrays, slice_obs e slice_req, normalizada pelo slice_req. O resultado desse cálculo deve ser normalizado pela variável buffer do sistema.
-        
-        Para o segundo caso, a função de reward deve ser dada em função de uma variável delta, calculada pela diferença entre os arrays slice_obs e slice_req. Também utiliza-se a variável k para indicar a posição em slice_obs do slice a ser priorizado. Iterando pelos elementos dos arrays, verifica-se simulataneamente se o elemento atual é diferente de k e se delta é menor que zero, entre 0 e 2 ou maior que dois. Caso seja menor que zero e o elemento atual diferente de k, a reward é dada por -3 vezes delta normalizado por um beuffer vezes a tangenete hiperbólica de delta (normalizado). Caso delta esteja entre 0 e 2 e o elemento atual seja diferente de k, o valor de reward é zero. Caso seja delta seja maior que 2 e o elemento atual diferente de k, a reward é dada por -1 vezes delta (normalizado) vezes tangente hiperbólica de delta (normalizado). Por fim, no caso de do elemento atual ser igual a k, a reward é dada pelo módulo de delta (normalizado) vezes a tangente hiperbólica de delta (normalizado). A função de reward feve ser dada pela soma dos rewards em cada posição dos vetores slice_obs e slice_req.
-                
-        Para o terceiro caso, a função de recompensa deve ser definida a partir da iteração simultânea sobre os arrays slice_obs e slice_req, calculando-se, para cada posição i, o erro como a diferença entre o valor observado e o valor requerido. A lógica de atribuição da recompensa segue três condições: se o valor observado for estritamente maior que o requisito somado a duas unidades, a recompensa para aquele índice é o produto do erro negativo pela tangente hiperbólica do erro subtraído de duas unidades; se o valor observado for maior que o requisito, mas não ultrapassar esse limite de duas unidades adicionais, o valor de recompensa adicionado é zero; caso o valor observado seja igual ou inferior ao requisito, a recompensa é calculada multiplicando-se a constante 3 pela tangente hiperbólica do erro e pelo valor negativo desse mesmo erro. A função deve retornar a soma total das recompensas acumuladas em todas as iterações.
-        
-        Para o quarto caso, a função de reward deve ser dada por uma variável reward que seja dada pela soma ponderada da razão entre dois arrays. slice_obs e slice_req, na qual os pesos são dados por um array k, o qual é só possui elementos +1 ou -1, indicados pelo tipo de métrica do slice. O resultado desse cálculo deve ser normalizado pela variável buffer do sistema.
+        3 - The third resource allocation use case aims to save resources by meeting only the requirement of all slices. In this case, the reward function should penalize the agent for any deviation between the observed values and the requirements so that excess resources are saved.
 
-        
-        **Requisitos da Lógica de Recompensa:**
+        4 - The fourth resource allocation use case aims to optimize the performance of all slices based on their performance metric. To do this, the reward function should reward the agent proportionally to the performance relative to the requirement for each slice. In addition, the function should assign a weight (+1) to throughput slices and (-1) to latency slices.
+
+        **Task:**
+        Given the logical description, map the description to one of the use cases and generate a reward function for a reinforcement learning agent for resource allocation in that case.
+
+        For the first case, the reward function should be given by a variable reward that is the sum of the minimum between 0 and the difference between two arrays, slice_obs and slice_req, normalized by slice_req. The result of this calculation should be normalized by the system buffer variable.
+
+        For the second case, the reward function should be expressed as a function of a delta variable calculated from the difference between the arrays slice_obs and slice_req. The variable k is also used to indicate the position in slice_obs of the slice to be prioritized. Iterating over the array elements, it checks simultaneously whether the current element is different from k and whether delta is less than zero, between 0 and 2, or greater than 2. If it is less than zero and the current element differs from k, the reward is given by -3 times delta normalized by a buffer times the hyperbolic tangent of the normalized delta. If delta is between 0 and 2 and the current element differs from k, the reward value is zero. If delta is greater than 2 and the current element differs from k, the reward is given by -1 times delta (normalized) times the hyperbolic tangent of the normalized delta. Finally, if the current element equals k, the reward is given by the absolute value of delta (normalized) times the hyperbolic tangent of the normalized delta. The reward function should be the sum of the rewards at each position of the slice_obs and slice_req vectors.
+
+        For the third case, the reward function should be defined from simultaneous iteration over the slice_obs and slice_req arrays, calculating for each position i the error as the difference between the observed value and the required value. The reward assignment logic follows three conditions: if the observed value is strictly greater than the requirement plus two units, the reward for that index is the product of the negative error and the hyperbolic tangent of the error minus two units; if the observed value is greater than the requirement but does not exceed this two-unit limit, the reward added is zero; if the observed value is equal to or less than the requirement, the reward is calculated by multiplying the constant 3 by the hyperbolic tangent of the error and the negative of that same error. The function should return the sum of all accumulated rewards.
+
+        For the fourth case, the reward function should be given by a variable reward that is the weighted sum of the ratio between two arrays, slice_obs and slice_req, where the weights are given by an array k, which contains only elements +1 or -1, indicated by the slice metric type. The result of this calculation should be normalized by the system buffer variable.
+
+        **Reward Logic Requirements:**
         "{descricao_logica}"
 
-        **Formato da Saída:**
-        Sua saída deve ser **apenas a linha de código Python** e nada mais. Não inclua "python", acentos graves (```), ou explicações.
+        **Output Format:**
+        Your output must be only the Python code line and nothing else. Do not include "python", backticks (```), or explanations.
         """
         return prompt_template.strip()
-    
 
     def k_indice(self, descricao_logica: str):
         """
-        Recebe uma DESCRIÇÃO da lógica de recompensa, consulta o LLM 
-        e retorna o índice k correspondente.
+        Receives a DESCRIPTION of the reward logic, queries the LLM 
+        and returns the corresponding k index.
         
         Returns:
-            int: O índice k gerado, ou None em caso de falha.
+            int: The generated k index, or None in case of failure.
         """
         prompt = f"""
-        A partir da frase seguinte, indique , se houver, qual o índice em um numpy array estaria o slice a ter o desempenho maximizado:
+        From the following phrase, indicate, if any, which index in a numpy array would the slice to have maximized performance:
         "{descricao_logica}"
         
-        Diga apenas o número (índice). Não diga mais nada. Como é um numpy array, se for o primeiro slice, retorne '0', se for o segundo slice, retorne '1', e assim por diante.
-        Se não houver slice a ser maximizado, responda 'None'.
+        Say only the number (index). Do not say anything else. As it is a numpy array, if it is the first slice, return '0', if it is the second slice, return '1', and so on.
+        If there is no slice to be maximized, answer 'None'.
         """
         
         try:
@@ -164,42 +158,40 @@ class LLMAgent:
                 content = None
 
             if not content:
-                print("Erro: não foi possível extrair conteúdo da resposta do LLM para k_indice.")
+                print("Error: could not extract content from LLM response for k_indice.")
                 return None
             
-            # Limpar a resposta e tentar converter para int
-            # O LLM pode responder "2" ou "índice 2" ou "O índice é 2."
-            # Usamos regex para pegar o primeiro número que aparecer.
+            # Clean the response and try to convert to int
+            # The LLM may respond "2" or "index 2" or "The index is 2."
+            # We use regex to get the first number that appears.
             match = re.search(r'\d+', content)
             if match:
                 indice_k = int(match.group(0))
-                #print(f"Índice K extraído: {indice_k}")
+                #print(f"K Index extracted: {indice_k}")
                 return indice_k
             else:
-                print(f"Erro: Não foi possível extrair um número da resposta: {content}")
+                print(f"Error: Could not extract a number from the response: {content}")
                 return None
 
         except Exception as e:
-            print(f"Ocorreu um erro ao chamar o LLM para k_indice: {e}")
+            print(f"An error occurred when calling the LLM for k_indice: {e}")
             return None
         
     def k_array(self, descricao_logica: str, slice_req):
         """
-        Recebe uma DESCRIÇÃO da lógica de recompensa, consulta o LLM 
-        e retorna o array k correspondente.
+        Receives a DESCRIPTION of the reward logic, queries the LLM 
+        and returns the corresponding k array.
         
         Returns:
-            np.ndarray: O array k gerado, ou None em caso de falha. Possui a dimensão do número de slices
+            np.ndarray: The generated k array, or None in case of failure. Has the dimension of the number of slices
         """
         prompt = f"""
-        A partir da frase seguinte, indique , se houver, qual o array k de pesos (+1 ou -1) para cada slice em um numpy array, onde +1 indica slices de vazão e -1 indica slices de latência:
+        From the following sentence, indicate, if any, what the k array of weights (+1 or -1) is for each slice in a numpy array, where +1 indicates throughput slices and -1 indicates latency slices:
         "{descricao_logica}"
 
-        Diga apenas o array no formato numpy, por exemplo: np.array([1, 1, -1, -1]), no caso de um cenário com 4 slices. Adapte o tamanho do vetor para o número de slices. Não diga mais nada.
-        Se não houver slice a ser maximizado, responda 'None'.
+        Say only the array in numpy format, for example: np.array([1, 1, -1, -1]), in the case of a scenario with 4 slices. Adapt the vector size to the number of slices. Say nothing else.
+        If there is no slice to be maximized, respond 'None'.
         """
-        #O vetor abaixo contém os requisitos de throughput (em Mbps) e latência (em s) para os slices descritos, sendo que a primeira metade do array corresponde aos requisitos de throughput e a segunda metade aos requisitos de latência:
-        #"{slice_req}"
         
         try:
             response = self.client.chat.completions.create(
@@ -217,28 +209,26 @@ class LLMAgent:
                 content = None
 
             if not content:
-                print("Erro: não foi possível extrair conteúdo da resposta do LLM para k_array.")
+                print("Error: could not extract content from LLM response for k_array.")
                 return None
             
-            # Tentar avaliar o array retornado
             array_match = re.search(r'np\.array\(\s*\[([-\d,\s]+)\]\s*\)', content)
             if array_match:
                 array_str = array_match.group(1)
                 array_values = [int(x.strip()) for x in array_str.split(',')]
                 k_array = np.array(array_values)
-                #print(f"Array K extraído: {k_array}")
                 return k_array
             else:
-                print(f"Erro: Não foi possível extrair um array da resposta: {content}")
+                print(f"Error: Could not extract an array from the response: {content}")
                 return None
 
         except Exception as e:
-            print(f"Ocorreu um erro ao chamar o LLM para k_array: {e}")
+            print(f"An error occurred when calling the LLM for k_array: {e}")
             return None
     
     def k_type(self, descricao_logica: str, slice_req):
         """
-        Recebe a descrição lógica e determina o tipo de k.
+        Receives the logical description and determines the type of k.
         """
         k = self.k_indice(descricao_logica)
         if type(k) is int:
@@ -253,16 +243,15 @@ class LLMAgent:
         
     def create_reward_function(self, intent, slice_req, k, output_file="reward_function.py"):
         """
-        Cria a função de recompensa com base no intent fornecido e salva em um arquivo.
+        Creates the reward function based on the provided intent and saves it to a file.
         """
 
         try:
-            #Gera o código python a partir do intent
             codigo_str = self.llm_reward_agent(intent)
             #requirements_code = self.get_requiriments(intent)
 
             if codigo_str is None:
-                raise ValueError("Erro: 'codigo_str' é None. Verifique a saída de 'llm_reward_agent'.")
+                raise ValueError("Error: 'codigo_str' is None. Check the output of 'llm_reward_agent'.")
             codigo_indentado = "\n".join("    " + line if line.strip() != "" else "" for line in codigo_str.splitlines())
             
             #k = self.k_type(intent) #Verifica o tipo de k a ser usado
@@ -292,20 +281,17 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
     return reward
 """
 
-
             with open(output_file, "w") as f:
                 f.write(codigo_python)
-            #print(f"Função de recompensa salva como '{output_file}'.")
-            print(f"DEBUG: Função de recompensa gerada:\n{codigo_python}")
+            print(f"DEBUG: Generated reward function:\n{codigo_python}")
             return codigo_python, k
         except Exception as e:
-            print(f"Erro ao criar a função de recompensa: {e}")
+            print(f"Error creating the reward function: {e}")
 
-    
     def run_reward_function(self, slice_obs, slice_req, buffer):
         """
-        Executa a função de recompensa carregando o módulo gerado e chamando a função.
-        Retorna o valor de reward (ou None em caso de erro).
+        Executes the reward function by loading the generated module and calling the function.
+        Returns the reward value (or None in case of error).
         """
         #if not self.existing_code():
         #    print(f"Arquivo '{self.code_path}' não encontrado ou está vazio.")
@@ -319,71 +305,69 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             spec.loader.exec_module(module)
 
             if not hasattr(module, "reward_function"):
-                print("O módulo gerado não contém 'reward_function'.")
+                print("The generated module does not contain 'reward_function'.")
                 return None
 
             # Garantir que a função receba tipos compatíveis (numpy arrays) para indexação/mascara
             obs_arr = np.array(slice_obs)
             slice_req_arr = np.array(slice_req)
-            
+
             print(f"DEBUG: obs_arr={obs_arr}")
             print(f"DEBUG: slice_req_arr={slice_req_arr}")
 
             resultado = module.reward_function(obs_arr, slice_req_arr, buffer)
-            #print("DEBUG: Resultado da função de recompensa:", resultado)
             return resultado
 
         except FileNotFoundError:
-            print("Erro: arquivo de função não encontrado.")
+            print("Error: reward function file not found.")
         except Exception as e:
-            print(f"Ocorreu um erro ao executar a função de recompensa: {e}")
+            print(f"An error occurred while executing the reward function: {e}")
             traceback.print_exc()
             return None
-        
+
     def existing_code(self):
         """
-        Verifica se o código já existe.
+        Verifies whether the code already exists.
         """
-        #print(f"DEBUG: Verificando existência do código em '{self.code_path}'")
-        print(f"DEBUG: Caminho do código: {self.code_path}")
+        print(f"DEBUG: Code path: {self.code_path}")
         if self.code_path.is_file() and self.code_path.stat().st_size > 0:
-        #    print("DEBUG: O código existe e não está vazio.")
+            print("DEBUG: The code exists and is not empty.")
             return True
         else:
-        #    print("DEBUG: O código não existe ou está vazio.")
+            print("DEBUG: The code does not exist or is empty.")
             return False
         
     def get_classification_prompt(self, descricao_logica: str):
         """
-        Classifica a descrição lógica em um dos 4 casos de uso.
+        Classifies the logical description into one of 4 use cases.
         """
         prompt = f"""
-        Você é um especialista em Redes de Acesso Rádio (RAN) e network slicing.
-        Sua tarefa é definir qual caso de uso utilizar de acordo com a lógica de descrição fornecida.
-        Analise a solicitação do operador abaixo e classifique-a em um dos 4 casos de uso.
+        You are an expert in Radio Access Networks (RAN) and network slicing.
+        Your task is to determine which use case to use according to the provided logical description.
+        Analyze the operator request below and classify it into one of the 4 use cases.
 
-        **DEFINIÇÕES DOS CASOS:**
+        **USE CASE DEFINITIONS:**
 
-        Caso 1 - O primeiro caso de uso de alocação de recursos tem por objetivo cumprir todos os requisitos, podendo ultrapassar os requisitos de cada slice de rede. Nesse caso, a função de reward deve focar em punir o agente não cumprir o requisito mas não leva em consideração se os slices ultrapassam o requisito.
+        Case 1 - The first resource allocation use case aims to satisfy all requirements, possibly exceeding the requirements of each network slice. In this case, the reward function should focus on penalizing the agent for not meeting the requirement but does not consider whether the slices exceed the requirement.
 
-        Caso 2 - O segundo caso de uso de alocação de recursos tem por objetivo maximizar o desempenho de um dos slices e apenas cumprir o requisito dos outros, sem ultrapassar o valor do requisito. Para isso, a função de reward deve punir o agente se não for observado o exato valor do requisito, e deve recompensar o agente se o slice priorizado tiver o maior valor observado possível. Deve-se obter o índice do slice a ser priorizado a partir da descrição lógica.
+        Case 2 - The second resource allocation use case aims to maximize the performance of one of the slices while only meeting the requirements of the others, without exceeding the required value. To do this, the reward function should penalize the agent if the exact required value is not observed, and should reward the agent if the prioritized slice has the highest observed value possible. The index of the slice to be prioritized must be obtained from the logical description.
 
-        Caso 3 - O terceiro caso de uso de alocação de recursos tem por objetivo economizar recursos e assim cumprir apenas o requisito de todos os slices. Nesse caso, a função de reward deve punir o agente por qualquer desvio entre o observado eos requisitos, a fim de que o excedente de recursos seja economizado.
+        Case 3 - The third resource allocation use case aims to save resources by meeting only the requirement of all slices. In this case, the reward function should penalize the agent for any deviation between the observed values and the requirements so that excess resources are saved.
 
-        Caso 4 - O quarto caso de uso de alocação de recursos tem por objetivo otimizar o desempenho de todos os slices a partir de sua métrica de desempenho. Para isso, a função de reward deve recompensar o agente proporcialmente ao desempenho em relação ao requisito para cada slice. Além disso, a função deve atribuir um peso (+1) para slices de vazão e (-1) para slices de latência. 
+        Case 4 - The fourth resource allocation use case aims to optimize the performance of all slices based on their performance metric. To do this, the reward function should reward the agent proportionally to the performance relative to the requirement for each slice. In addition, the function should assign a weight (+1) to throughput slices and (-1) to latency slices.
 
-        **SOLICITAÇÃO DO OPERADOR:**
+        **OPERATOR REQUEST:**
         "{descricao_logica}"
 
-        **SAÍDA:**
-        Responda APENAS com o número do caso (1, 2, 3 ou 4). Não escreva nada além do número.
+        **OUTPUT:**
+        Respond ONLY with the case number (1, 2, 3, or 4). Do not write anything else.
         """
 
         try:
             response = self.client.chat.completions.create(
                 model=self.MODEL,
                 messages=[
-                    {"role": "system", "content": "Responda apenas com o número da classe."},
+                    {"role": "system", "content": "Respond with only the class number."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.0,
@@ -391,34 +375,30 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             raw = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
             clean = ''.join(filter(str.isdigit, raw))
             case_num = (int(clean) if clean else -1)
-            print(f"DEBUG: Caso classificado: {case_num}")
+            print(f"DEBUG: Classified case: {case_num}")
             return case_num
-            #if case_num == 3:
-            #    return True
-            #else:
-            #    return False
         except Exception:
-            print("Erro ao classificar a descrição lógica.")
-            
+            print("Error while classifying the logical description.")
+
     def get_requiriments(self, descricao_logica: str):
         """
-        Extrai os requisitos dos slices a partir da descrição lógica.
+        Extracts the slice requirements from the logical description.
         """
         prompt = f"""
-        Você é um especialista em Redes de Acesso Rádio (RAN) e network slicing.
-        Sua tarefa é extrair os requisitos de throughput e latência dos slices a partir da descrição lógica fornecida.
+        You are an expert in Radio Access Networks (RAN) and network slicing.
+        Your task is to extract the throughput and latency requirements of the slices from the provided logical description.
 
-        **SOLICITAÇÃO DO OPERADOR:**
+        **OPERATOR REQUEST:**
         "{descricao_logica}"
-        
-        **REGRAS:**
-        1. Quando a métrica for vazão (throughput), extraia os valores em Mbps.
-        2. Quando a métrica for latência (latency), extraia os valores em s.
-        3. Quando não houver menção explicita da latencia, use o valor padrão de np.nan, para indicar que essa medida não foram especificada.
-        4. Quando não houver menção explicita da vazão, use o valor padrão de np.nan, para indicar que essa medida não foram especificada.
-        
-        **SAÍDA:**
-        Responda dois arrays separados, um para throughput e outro para latência, no formato:
+
+        **RULES:**
+        1. When the metric is throughput, extract the values in Mbps.
+        2. When the metric is latency, extract the values in s.
+        3. When there is no explicit mention of latency, use the default value np.nan to indicate that this measure was not specified.
+        4. When there is no explicit mention of throughput, use the default value np.nan to indicate that this measure was not specified.
+
+        **OUTPUT:**
+        Respond with two separate arrays, one for throughput and one for latency, in the format:
         [100, 200], [10, 30]
         """
 
@@ -426,15 +406,14 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
             response = self.client.chat.completions.create(
                 model=self.MODEL,
                 messages=[
-                    {"role": "system", "content": "Responda apenas com os dois arrays separados."},
+                    {"role": "system", "content": "Respond only with the two arrays separated."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.0,
             )
             content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
-            print(f"DEBUG: Requisitos extraídos: {content}")
-            
-            # Parse the response to extract throughput and latency arrays
+            print(f"DEBUG: Extracted requirements: {content}")
+
             match = re.match(r'\[([^\]]+)\],\s*\[([^\]]+)\]', content)
             if match:
                 throughput = np.array([
@@ -452,128 +431,102 @@ def reward_function(slice_obs, slice_req, buffer, k=None):
                 formatted = formatted.replace('nan', 'np.nan')
                 return slice_requirements
             else:
-                print("DEBUG: Formato inesperado na resposta.")
-                return None#, None
+                print("DEBUG: Unexpected response format.")
+                return None
         except Exception as e:
-            print(f"DEBUG: Erro ao extrair os requisitos da descrição lógica: {e}")
-            return None#, None
+            print(f"DEBUG: Error extracting the requirements from the logical description: {e}")
+            return None
         
-        ##### TESTANDO NOVA ESTRUTURA ######
+        ##### TESTING NEW STRUCTURE ######
     def agent_pipeline(self, descricao_logica: str):
         """
-        Pipeline de agentes para gerar, validar e formatar a função de recompensa."""
-        
+        Agent pipeline to generate, validate, and format the reward function."""
+
         llm = LLM(model=self.MODEL, temperature=0.2, api_key=api_key)
-        # 1. CONFIGURAÇÃO DOS AGENTES
-        especialista_rl = Agent(
-            role='Especialista em Reinforcement Learning e Telecomunicações',
-            goal='Traduzir solicitações de operadores de rede (RAN) em lógicas precisas de cálculo de recompensa (Reward Functions) em Python.',
-            backstory='Você é um engenheiro de telecomunicações especialista em 5G/6G Network Slicing e Reinforcement Learning. Você entende profundamente os 4 casos de uso de alocação de recursos (1: Cumprir requisito, 2: Maximizar um slice, 3: Economizar recursos, 4: Otimizar todos com pesos).',
+        specialist_rl = Agent(
+            role='Specialist in Reinforcement Learning and Telecommunications',
+            goal='Translate network operator requests (RAN) into precise reward function logic in Python.',
+            backstory='You are a telecommunications engineer specializing in 5G/6G Network Slicing and Reinforcement Learning. You deeply understand the 4 resource allocation use cases (1: Meet requirements, 2: Maximize one slice, 3: Save resources, 4: Optimize all with weights).',
             verbose=True,
             llm=llm
         )
 
-        revisor_qa = Agent(
-            role='Engenheiro de Validação de Código RL',
-            goal='Garantir que a função gerada atende estritamente às regras de variáveis, buscar erros conceituais de reward shaping e possui a assinatura correta.',
-            backstory='Você é um QA meticuloso. Sua função é receber o código do especialista em RL e verificar se: 1) A função se chama "reward_function". 2) Ela recebe exatamente os parâmetros (slice_obs, slice_req, buffer). 3) A variável "reward" é inicializada em 0.0 e retornada no final. Se houver erro, você corrige o código.',
+        qa_reviewer = Agent(
+            role='RL Code Validation Engineer',
+            goal='Ensure the generated function strictly follows the variable rules, identifies conceptual reward-shaping issues, and has the correct signature.',
+            backstory='You are a meticulous QA engineer. Your role is to receive the RL specialist code and verify that: 1) The function is named "reward_function". 2) It receives exactly the parameters (slice_obs, slice_req, buffer). 3) The "reward" variable is initialized to 0.0 and returned at the end. If there is an error, you fix the code.',
             verbose=True,
             llm=llm
         )
 
-        formatador_saida = Agent(
-            role='Formatador de Scripts Python',
-            goal='Extrair apenas o código Python funcional, removendo qualquer conversa do modelo.',
-            backstory='Você é o guardião do arquivo final. Você não avalia lógica. Sua única função é remover saudações, explicações e marcadores Markdown (como ```python e ```). O resultado deve ser apenas o código puro.',
+        output_formatter = Agent(
+            role='Python Script Formatter',
+            goal='Extract only functional Python code, removing any model conversation.',
+            backstory='You are the guardian of the final file. You do not evaluate logic. Your only job is to remove greetings, explanations, and Markdown markers (such as ```python and ```). The result must be pure code.',
             verbose=True,
             llm=llm
         )
 
-        # 2. CONFIGURAÇÃO DAS TAREFAS
-        # A tarefa 1 recebe as regras lógicas e usa o placeholder {descricao_logica}
-        tarefa_gerar_reward = Task(
-            description='''A partir da solicitação do operador: "{descricao_logica}", identifique qual dos 4 casos de uso de Network Slicing se aplica e crie a lógica.
+        generate_reward_task = Task(
+            description='''Based on the operator request: "{descricao_logica}", identify which of the 4 Network Slicing use cases applies and create the logic.
 
-        Casos de Uso:
-            1 - O primeiro caso de uso de alocação de recursos tem por objetivo cumprir todos os requisitos, podendo ultrapassar os requisitos de cada slice de rede. Nesse caso, a função de reward deve focar em punir o agente não cumprir o requisito mas não leva em consideração se os slices ultrapassam o requisito.
-            2 - O segundo caso de uso de alocação de recursos tem por objetivo maximizar o desempenho de um dos slices e apenas cumprir o requisito dos outros, sem ultrapassar o valor do requisito. Para isso, a função de reward deve punir o agente se não for observado o valor do requisito, e assim recompensar o agente se o slice priorizado tiver o maior valor observado possível. 
-            3 - O terceiro caso de uso de alocação de recursos tem por objetivo economizar recursos e assim cumprir apenas o requisito de todos os slices. Nesse caso, a função de reward deve punir o agente por qualquer desvio entre o observado e os requisitos, a fim de que o excedente de recursos seja economizado.
-            4 - O quarto caso de uso de alocação de recursos tem por objetivo otimizar o desempenho de todos os slices a partir de sua métrica de desempenho. Para isso, a função de reward deve recompensar o agente proporcialmente ao desempenho em relação ao requisito para cada slice. Além disso, a função deve atribuir um peso (+1) para slices de vazão e (-1) para slices de latência. 
+        Use Cases:
+            1 - The first resource allocation use case aims to satisfy all requirements, possibly exceeding the requirements of each network slice. In this case, the reward function should focus on penalizing the agent for not meeting the requirement but should not consider whether the slices exceed the requirement.
+            2 - The second resource allocation use case aims to maximize the performance of one slice while only meeting the requirements of the others, without exceeding the required value. To do this, the reward function should penalize the agent if the required value is not observed and reward the agent if the prioritized slice has the highest observed value possible.
+            3 - The third resource allocation use case aims to save resources by meeting only the requirement of all slices. In this case, the reward function should penalize the agent for any deviation between the observed values and the requirements so that excess resources are saved.
+            4 - The fourth resource allocation use case aims to optimize the performance of all slices based on their performance metric. To do this, the reward function should reward the agent proportionally to the performance relative to the requirement for each slice. In addition, the function should assign a weight (+1) to throughput slices and (-1) to latency slices.
 
-        Variáveis Disponíveis para a equação:**
-            * `reward` (float): A variável de recompensa (inicializada em 0.0).
-            * `slice_obs` (np.ndarray): O array de observações atuais de throughput.
-            * `slice_req` (np.ndarray): O array de requisitos mínimos.
-        Gere a função Python.''',
-            expected_output='O código Python inicial implementando a função de reward.',
-            agent=especialista_rl
+        Variables available for the equation:**
+            * `reward` (float): The reward variable (initialized to 0.0).
+            * `slice_obs` (np.ndarray): The current throughput observation array.
+            * `slice_req` (np.ndarray): The minimum requirement array.
+        Generate the Python function.''',
+            expected_output='The initial Python code implementing the reward function.',
+            agent=specialist_rl
         )
 
-        tarefa_validar_codigo = Task(
-            description='''Analise a função gerada pela tarefa anterior.
-        Regras obrigatórias:
-        - O nome da função DEVE ser: def reward_function(slice_obs, slice_req, buffer):
-        - O código deve inicializar reward = 0.0 e retornar reward no final.
-        - Verifique se a lógica matemática reflete um dos 4 casos de uso.
-        - Verifique se a função utiliza de gradiente descendente como uma forma de facilitar a convergência do agente, ou seja, se o código pune o agente proporcionalmente ao erro cometido,ou seja, de forma não linear.
-        - Verifique se a função é sensível a desvios, ou seja, o agente deve punir mais severamente os desvios abaixo dos requisitos do que os desvios acima dos requisitos, a fim de incentivar o agente a cumprir os requisitos.
-        - Não utilize normalização dos dados na função, use valores brutos.
-        - Considere valores de tolerância (eps) de 2Mbps, *apenas acima dos requisitos*, para facilitar a convergência do agente, ou seja, se o slice estiver dentro de 2Mbps do requisito, considere que o slice está cumprindo o requisito.
-        - Buscar erros comuns de reward shaping, como: não punir o agente por não cumprir requisitos.
-        Corrija qualquer anomalia e retorne o código completo corrigido.''',
-            expected_output='O código Python validado e corrigido.',
-            agent=revisor_qa
+        validate_code_task = Task(
+            description='''Analyze the function generated by the previous task.
+        Mandatory rules:
+        - The function name MUST be: def reward_function(slice_obs, slice_req, buffer):
+        - The code must initialize reward = 0.0 and return reward at the end.
+        - Verify that the mathematical logic reflects one of the 4 use cases.
+        - Verify that the function uses a descending gradient as a way to facilitate convergence, meaning the code penalizes the agent proportionally to the error committed, in a non-linear way.
+        - Verify that the function is sensitive to deviations, meaning the agent should be penalized more severely for deviations below requirements than for deviations above requirements to encourage compliance.
+        - Do not normalize the data in the function; use raw values.
+        - Consider tolerance values (eps) of 2 Mbps, only above the requirements, to facilitate convergence, meaning if the slice is within 2 Mbps of the requirement, consider it as meeting the requirement.
+        - Check common reward-shaping errors, such as not penalizing the agent for not meeting requirements.
+        Correct any anomalies and return the full corrected code.''',
+            expected_output='The validated and corrected Python code.',
+            agent=qa_reviewer
         )
 
-        tarefa_limpar_formato = Task(
-            description='''Pegue o código validado. Remova formatações Markdown e textos extras. Deixe apenas o código Python executável e comentários.
-            Apenas a função reward_function e suas dependências/comentários devem permanecer.''',
-            expected_output='Apenas as linhas de código Python.',
-            agent=formatador_saida,
-            output_file=self.code_name # Salva automaticamente
+        format_output_task = Task(
+            description='''Take the validated code. Remove Markdown formatting and extra text. Leave only executable Python code and comments.
+            Only the reward_function function and its dependencies/comments should remain.''',
+            expected_output='Only the Python code lines.',
+            agent=output_formatter,
+            output_file=self.code_name
         )
 
-        # 3. CRIAÇÃO DA EQUIPE E EXECUÇÃO
-        equipe_rl = Crew(
-            agents=[especialista_rl, revisor_qa, formatador_saida],
-            tasks=[tarefa_gerar_reward, tarefa_validar_codigo, tarefa_limpar_formato],
+        rl_team = Crew(
+            agents=[specialist_rl, qa_reviewer, output_formatter],
+            tasks=[generate_reward_task, validate_code_task, format_output_task],
             process=Process.sequential
         )
 
-        print("Iniciando a geração da função de reward...")
+        print("Starting reward function generation...")
 
-        # O dicionário 'inputs' mapeia a variável para dentro das Tasks
-        resultado = equipe_rl.kickoff(inputs={"descricao_logica": descricao_logica}
-        )
-        
+        resultado = rl_team.kickoff(inputs={"descricao_logica": descricao_logica})
+
 if __name__ == "__main__":
-    
-    agent = LLMAgent()
-    
-    descricao_teste_caso = """
-    Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 50, 20 e 10 Mbps, respectivamente.
-    Deseja-se cumprir os requisitos do primeiro e segundo slice, sem ultrapassá-los ou ficar abaixo, para maximizar o desempenho no terceiro slice, no qual é desejado que o desempeno seja o maior possível.
-    """
-    #generate_code = agent.llm_reward_agent(descricao_teste_caso)
-    #print(f"{generate_code}")
-    #create_code = agent.create_reward_function(descricao_teste_caso, [50, 20, 10], 2)
-    slice_requirements = agent.get_requiriments(descricao_teste_caso)
-    print(f"\n[Resultado] Código de requisitos extraído: {slice_requirements}")
-    resultado = agent.agent_pipeline(descricao_teste_caso)
-    #get_case = agent.get_classification_prompt(descricao_teste_caso)
-    #print(f"\n[Resultado] Código de requisitos extraído: {slice_requirements}")
-    #k = agent.k_type(descricao_teste_caso, slice_requirements)
-    #print(f"\n[Resultado] k extraído: {k}")
-    #codigo_recompensa, k_indice = agent.create_reward_function(descricao_teste_caso, slice_requirements, k)
-    #case_num = agent.get_classification_prompt(descricao_teste_caso)
-    #print(f"\n[Resultado] Código gerado: {codigo_recompensa}")
-    #print(f"\n[Resultado] Índice k gerado: {type(k_indice)}")
-    #agent.run_reward_function([80, 150], [100, 200], k_indice)
-    
 
-    #descricao_teste_caso_3 = "economizar recursos e assim cumprir apenas o requisito de todos os slices"
-    #
-    #print("--- Testando llm_reward_agent (Caso 3) ---")
-    #codigo_recompensa_3 = agent.create_reward_function(descricao_teste_caso_3)
-    #if codigo_recompensa_3:
-    #    print(f"\n[Resultado] Código gerado: {codigo_recompensa_3}")
+    agent = LLMAgent()
+
+    test_case_description = """
+    Consider a situation with three network slices, each with its own performance requirements. The requirements for each slice are 50, 20, and 10 Mbps, respectively.
+    The goal is to meet the requirements of the first and second slices without exceeding or falling below them, while maximizing the performance of the third slice, where the highest performance is desired.
+    """
+    slice_requirements = agent.get_requiriments(test_case_description)
+    print(f"\n[Result] Extracted requirements code: {slice_requirements}")
+    resultado = agent.agent_pipeline(test_case_description)
