@@ -27,11 +27,20 @@ class MobNet(Env):
         super(MobNet, self).__init__()
         self.llm_agent = LLMAgent()
         self.intent = """
-            Considere uma situação onde tem-se três slices de rede, cada um com seus próprios requisitos de desempenho. Os requisitos para cada slice são: 50, 20 e 10 Mbps, respectivamente.
-            Deseja-se cumprir os requisitos, mas há interesse em economia de recursos.
+            Consider a situation with three network slices, each with its own performance requirements. The requirements for each slice are: 50, 20 and 10 Mbps, respectively.
+            The goal is to meet the requirements, but there is interest in resource savings.
             """
-        self.case_num = self.llm_agent.get_classification_prompt(self.intent) 
-        self.save_energy = True if self.case_num == 3 else False
+            
+        self.scheduling_algorithm = scheduling_algorithm
+        self.save_energy = False
+        self.case_num = 0
+        print("DEBUG: Scheduling Algorithm:", self.scheduling_algorithm)
+        if self.scheduling_algorithm == "llm-scheduler":
+            self.case_num = self.llm_agent.get_classification_prompt(self.intent) 
+            self.save_energy = True if self.case_num == 3 else False
+            #self.k = self.llm_agent.k_type(self.intent, self.slice_req)
+            if not self.llm_agent.existing_code():
+                code = self.llm_agent.agent_pipeline(self.intent)
         
         self.steps_per_episode = 128
         self.curr_step = 0
@@ -43,10 +52,9 @@ class MobNet(Env):
             low=0, high=np.inf, shape=(self.slice_number*2,), dtype=np.float32
         )
         self.max_rbs_rate = 1.0
-        #self.slice_req = np.array([4, 1, 0.1, 0.001])
+
         self.slice_req = self.llm_agent.get_requiriments(self.intent)
         self.debug = debug
-        self.k = self.llm_agent.k_type(self.intent, self.slice_req)
         self.buffer = 1
         
         ## PARA O PROPORTIONAL FAIR
@@ -56,12 +64,13 @@ class MobNet(Env):
         self.slice_obs_hist = [deque(maxlen=self.obs_window) for _ in range(self.slice_number)]
 
         self.slice_obs_avg = np.zeros(self.slice_number, dtype=np.float64)
-        #self.llm_mode = llm_mode
-        self.scheduling_algorithm = scheduling_algorithm
-        #print("DEBUG: LLM Mode:", self.llm_mode)
-        print("DEBUG: Scheduling Algorithm:", self.scheduling_algorithm)
+
+        #self.scheduling_algorithm = scheduling_algorithm
+        #print("DEBUG: Scheduling Algorithm:", self.scheduling_algorithm)
+        #if not self.llm_agent.existing_code() and self.scheduling_algorithm == "llm-scheduler":
+        #    code = self.llm_agent.agent_pipeline(self.intent)
         
-        self.csv_file = "caso_2_train_6.csv"
+        self.csv_file = "caso_3_train_new.csv"
         if not os.path.exists(self.csv_file):
             with open(self.csv_file, mode="w", newline="") as f:
                 writer = csv.writer(f)
@@ -69,29 +78,6 @@ class MobNet(Env):
                     "timestamp","episode", "step", "reward", "max_rbs_rate", "action", "obs", "slice_req"
                 ])
             
-        #1°Caso
-        #    """
-        #    Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho.
-        #    Deseja-se cumprir os requisitos e não há interesse em economia de recursos.
-        #    """
-        #2°Caso
-        #    """
-        #    Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho.
-        #    Deseja-se cumprir os requisitos do primeiro e segundo slice, sem ultrapassá-los ou ficar abaixo, para maximizar o desempenho no terceiro slice, no qual é desejado que o desempeno seja o maior possível.
-
-        #3°Caso
-        #    """
-        #    Considere uma situação onde tem-se dois slices de rede, cada um com seus próprios requisitos de desempenho.
-        #    Deseja-se cumprir os requisitos, mas há interesse em economia de recursos.
-        #    """
-        #4°Caso
-        #    """
-        #    Considere uma rede com 3 slices, com o primeiro e segundo slices tendo suas métricas de performance sendo vazão de dados, e o terceiro slice tendo sua métrica de performance sendo latência. 
-        #    Deseja-se otimizar a performance dos três slices simultaneamente.
-        #    """
-        #    Considere uma rede com 3 slices, com o primeiro e segundo slices tendo suas métricas de performance sendo vazão de dados, e o terceiro slice tendo sua métrica de performance sendo latência. 
-        #    Os requisitos de throughput para cada slice são: 50, 20 e 10 Mbps, respectivamente.
-        #    Deseja-se otimizar a performance dos três slices simultaneamente.
     def step(self, action):
         if self.scheduling_algorithm == "llm-scheduler":
             reward = self.calculate_reward(self.obs)
@@ -161,7 +147,7 @@ class MobNet(Env):
         self.slice_inst_thr = inst_thr
 
     def set_buffer_occ(self, buffer_occ):
-        self.slice_buffer_occ = buffer_occ
+        self.slice_buffer_occ = np.array(buffer_occ)
 
     def calculate_reward(
         self,
@@ -179,9 +165,9 @@ class MobNet(Env):
             current_req = self.slice_req
             current_obs = slice_obs
             
-        if not self.llm_agent.existing_code():
-            code = self.llm_agent.agent_pipeline(self.intent)
-        #    code = self.llm_agent.create_reward_function(self.intent, current_req, self.k)
+        #if not self.llm_agent.existing_code():
+        #    code = self.llm_agent.agent_pipeline(self.intent)
+        ##    code = self.llm_agent.create_reward_function(self.intent, current_req, self.k)
         
         reward = self.llm_agent.run_reward_function(current_obs, current_req, self.buffer)
      
@@ -202,7 +188,7 @@ class MobNet(Env):
         max_buffer_size = 20480
         buffer_norm = self.slice_buffer_occ / max_buffer_size
         reward = 0.0
-        for i in range(self.slice_number): #TODO normalizar buffer occupancy 
+        for i in range(self.slice_number):  
             reward += w_t[i]*np.exp(slice_obs[i]) + w_bo[i]*np.exp(-buffer_norm[i])
         return reward
     
@@ -213,16 +199,12 @@ class MobNet(Env):
         return allocation
     
     def proportional_fair_schedule(self):
-        #thr = np.array(self.obs[:self.slice_number], dtype=np.float64)
         thr = self.slice_inst_thr
         avg = np.where(self.slice_obs_avg > 0, self.slice_obs_avg, np.maximum(thr, 1e-9))
         proportion = thr / avg
         proportion[proportion <= 0] = 1e-9
         allocation = proportion / proportion.sum()
         print(f"DEBUG: Proportional Fair - Inst_thr: {thr}, Avg: {avg}, Proportion: {proportion}, Allocation: {allocation}")
-        #tau = 2
-        #exp_metrics = np.exp(proportion/tau)
-        #allocation = exp_metrics / exp_metrics.sum()
         return allocation *100
     
     def record_network_observation(self, slice_obs: np.ndarray):
