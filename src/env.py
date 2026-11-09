@@ -17,18 +17,18 @@ from ray.tune.registry import get_trainable_cls
 import threading
 import shutil
 from time import sleep
-from .llm_reward import LLMAgent
+from .ma_llm_reward import LLMAgent
 from collections import deque
 import csv
 from datetime import datetime
 
 class MobNet(Env):
-    def __init__(self, slice_number=3, env_config=None, debug=False, scheduling_algorithm="llm-scheduler"):
+    def __init__(self, slice_number=3, env_config=None, debug=False, scheduling_algorithm="llm-scheduler", mode="train"):
         super(MobNet, self).__init__()
         self.llm_agent = LLMAgent()
         self.intent = """
-            Consider a situation with three network slices, each with its own performance requirements. The requirements for each slice are: 50, 20 and 10 Mbps, respectively.
-            The goal is to meet the requirements, but there is interest in resource savings.
+            Consider a situation with three network slices, each with its own performance requirements. The requirements for each slice are: 25, 10 and 5 Mbps, respectively.
+            The aim is to meet the requirements and there is no interest in resource savings.   
             """
             
         self.scheduling_algorithm = scheduling_algorithm
@@ -49,7 +49,7 @@ class MobNet(Env):
         self.slice_number = slice_number
         self.action_space = spaces.Box(low=0.1, high=1, shape=(self.slice_number + int(bool(self.save_energy)),))
         self.observation_space = spaces.Box(
-            low=0, high=np.inf, shape=(self.slice_number*2,), dtype=np.float32
+            low=0, high=np.inf, shape=(self.slice_number*4,), dtype=np.float32
         )
         self.max_rbs_rate = 1.0
 
@@ -69,8 +69,8 @@ class MobNet(Env):
         #print("DEBUG: Scheduling Algorithm:", self.scheduling_algorithm)
         #if not self.llm_agent.existing_code() and self.scheduling_algorithm == "llm-scheduler":
         #    code = self.llm_agent.agent_pipeline(self.intent)
-        
-        self.csv_file = "caso_3_train_new.csv"
+        self.mode=mode
+        self.csv_file = f"/opt/rl-models/caso_1_{self.mode}_new_25.csv"
         if not os.path.exists(self.csv_file):
             with open(self.csv_file, mode="w", newline="") as f:
                 writer = csv.writer(f)
@@ -134,7 +134,7 @@ class MobNet(Env):
         self.curr_step = 0
         if self.curr_ep > self.max_number_ep:
             self.curr_ep = 0
-        return np.zeros((self.slice_number*2)), {}
+        return np.zeros((self.slice_number*4)), {} #+CANAL
 
     def set_obs(self, obs):
         self.obs = obs
@@ -156,8 +156,8 @@ class MobNet(Env):
         
         if self.case_num in [1, 2, 3]:
             assert self.slice_req is not None, "slice_req cannot be None"
-            mid_req = len(self.slice_req) // 2
-            mid_obs = len(slice_obs) // 2
+            mid_req = 3 #len(self.slice_req) // 2
+            mid_obs = 3 #len(slice_obs) // 2
             
             current_req = self.slice_req[:mid_req]
             current_obs = slice_obs[:mid_obs]
@@ -169,7 +169,7 @@ class MobNet(Env):
         #    code = self.llm_agent.agent_pipeline(self.intent)
         ##    code = self.llm_agent.create_reward_function(self.intent, current_req, self.k)
         
-        reward = self.llm_agent.run_reward_function(current_obs, current_req, self.buffer)
+        reward = self.llm_agent.run_reward_function(current_obs, current_req)
      
         assert isinstance(reward, float)
         return reward
@@ -221,7 +221,32 @@ class MobNet(Env):
         return self.slice_obs_avg
 
 
-def _find_latest_checkpoint(checkpoint_root: str):
+# def _find_latest_checkpoint(checkpoint_root: str):
+#     checkpoint_paths = sorted(
+#         [
+#             p
+#             for p in Path(checkpoint_root).glob("**/checkpoint_*")
+#             if p.is_dir()
+#         ],
+#         key=lambda p: p.stat().st_mtime,
+#     )
+#     return checkpoint_paths[-1] if checkpoint_paths else None
+
+
+def _find_best_checkpoint(checkpoint_root: str, metric: str = "episode_reward_mean"):
+    try:
+        analysis = tune.ExperimentAnalysis(checkpoint_root)
+        if analysis.trials:
+            best_ckpt = analysis.get_best_checkpoint(analysis.trials[0], metric=metric, mode="max")
+            if best_ckpt:
+                ckpt_dir = getattr(best_ckpt, "path", None) or str(best_ckpt)
+                p = Path(ckpt_dir)
+                if p.is_dir():
+                    return p
+    except Exception:
+        pass
+
+    # Fallback: caso ainda não haja métricas registradas, pega o mais recente no disco
     checkpoint_paths = sorted(
         [
             p
@@ -234,7 +259,8 @@ def _find_latest_checkpoint(checkpoint_root: str):
 
 
 def _sync_latest_checkpoint(checkpoint_root: str, export_dir: str) -> bool:
-    latest = _find_latest_checkpoint(checkpoint_root)
+    # latest = _find_latest_checkpoint(checkpoint_root)
+    latest = _find_best_checkpoint(checkpoint_root)
     if latest is None:
         return False
 
@@ -377,9 +403,9 @@ def server_rl(slice_number=3, env_config=None, debug=False, llm_mode=True, sched
             lr=0.0003,  # SB3 LR
             train_batch_size=128,  # SB3 n_steps
             sgd_minibatch_size=32,  # type: ignore SB3 batch_size
-            num_sgd_iter=10,  # type: ignore SB3 n_epochs
-            gamma=0.99,  # SB3 gamma
-            lambda_=0.95,  # type: ignore # SB3 gae_lambda
+            num_sgd_iter=20,  # type: ignore SB3 n_epochs
+            gamma=0.9,  # SB3 gamma
+            lambda_=0.9,  # type: ignore # SB3 gae_lambda
             clip_param=0.2,  # type: ignore SB3 clip_range,
             vf_clip_param=np.inf,  # type: ignore SB3 equivalent to clip_range_vf=None
             use_gae=True,  # type: ignore SB3 normalize_advantage
@@ -419,9 +445,16 @@ def server_rl(slice_number=3, env_config=None, debug=False, llm_mode=True, sched
                     verbose=2,
                     storage_path=ray_storage,
                     name=AGENT_NAME,
+                    # checkpoint_config=air.CheckpointConfig(
+                    #     checkpoint_frequency=1,
+                    #     checkpoint_at_end=True,
+                    # ),
                     checkpoint_config=air.CheckpointConfig(
                         checkpoint_frequency=1,
                         checkpoint_at_end=True,
+                        checkpoint_score_attribute="episode_reward_mean",
+                        checkpoint_score_order="max",
+                        num_to_keep=3,
                     ),
                 ),
             ).fit()

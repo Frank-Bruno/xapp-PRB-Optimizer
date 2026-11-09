@@ -43,6 +43,7 @@ class XappNori:
         self.influx_url = "http://influxdb-influxdb2.influxdb.svc.cluster.local:8086"
         
         self.action_message = False
+        self.perc_action = np.array([33.0, 33.0, 33.0], dtype=np.float32) 
         self.rl_agent = os.getenv("RL_AGENT", "true").lower() in (
             "1",
             "true",
@@ -77,28 +78,6 @@ class XappNori:
             use_fake_sdl=False,  # Use a fake in-memory SDL
         )
 
-        # RL Server
-        if self.enable_ran_slicing:
-            #self.save_energy = False #llm agent that decide
-            #self.slice_ues = {{
-            #    1 : ["00004", "00005",],
-            #    2 : ["00006","00007",],
-            #}}
-            self.slice_ues = {}
-            self.env = MobNet(debug=True, slice_number=3, scheduling_algorithm=self.scheduling_algorithm)
-            self.test_mode = os.getenv("RL_INFERENCE_ONLY", "false").lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
-            print(f"DEBUG: Test mode: {self.test_mode}")
-            print(f"DEBUG: Scheduling algorithm: {self.scheduling_algorithm}")
-            if not self.test_mode:
-                self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 3, "debug": True, "scheduling_algorithm": self.scheduling_algorithm}, daemon=False)
-                self.env_thread.start()
-
-
         # Registering RMR message handlers
         self._rmrxapp.register_callback(
             handler=self.ric_indication_handler, message_type=12050
@@ -110,6 +89,8 @@ class XappNori:
         signal.signal(signal.SIGINT, self._handle_signal)
 
         # Starting a threaded HTTP server listening to any host at port 8080
+        # Start immediately so Kubernetes liveness probe (/ric/v1/health/alive) passes
+        # while MobNet/LLM/Ray initialization takes place in the background.
         self.http_server = xapp_rest.ThreadedHTTPServer("0.0.0.0", 8080)
         self.http_server.handler.add_handler(
             self.http_server.handler,
@@ -149,10 +130,6 @@ class XappNori:
         self.logger.info("Starting HTTP server.")
         self.http_server.start()
 
-        # xApp is ready to start
-        self._ready = True
-        self.logger.info("xApp is ready.")
-
         # InfluxDB client
         if self.save_influx:
             url = self.influx_url  # URL of your InfluxDB instance
@@ -161,7 +138,32 @@ class XappNori:
             self.bucket = "openranbr"  # your InfluxDB bucket name
             self.client = InfluxDBClient(url=url, token=token, org=org)
             self.write_api = self.client.write_api()
-        
+
+        # RL Server
+        if self.enable_ran_slicing:
+            #self.save_energy = False #llm agent that decide
+            #self.slice_ues = {{
+            #    1 : ["00004", "00005",],
+            #    2 : ["00006","00007",],
+            #}}
+            self.slice_ues = {}
+            self.test_mode = os.getenv("RL_INFERENCE_ONLY", "false").lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            if self.test_mode:
+                mode="test"
+            else:
+                mode="train"
+            self.env = MobNet(debug=True, slice_number=3, scheduling_algorithm=self.scheduling_algorithm, mode=mode)
+            print(f"DEBUG: Test mode: {self.test_mode}")
+            print(f"DEBUG: Scheduling algorithm: {self.scheduling_algorithm}")
+            if not self.test_mode:
+                self.env_thread = Thread(target=server_rl, kwargs={"slice_number": 3, "debug": True, "scheduling_algorithm": self.scheduling_algorithm}, daemon=False)
+                self.env_thread.start()
+
         if self.enable_ran_slicing:
             # RL Client
             sleep(30)
@@ -191,6 +193,10 @@ class XappNori:
                     inference_mode="local",
                 )
                 self.eid = self.client.start_episode(training_enabled=True)
+
+        # xApp is ready to start
+        self._ready = True
+        self.logger.info("xApp is ready.")
 
     # ------------------ START AND STOP
 
@@ -474,7 +480,7 @@ class XappNori:
             ########### Interaction with RL Environment
             # Observation
             #TODO: coletar da porcentagem calculado pelo nori
-            ues_thr, ues_lat, sid_ue, inst_thr_ues, buffer_occ_ues = self.get_thr_data(ric_indication_data)
+            ues_thr, ues_lat, sid_ue, inst_thr_ues, buffer_occ_ues, ues_sinr = self.get_thr_data(ric_indication_data)
             
             if not self.slice_ues and not sid_ue.get(0):
                 ord_slices = dict(sorted(sid_ue.items()))
@@ -487,6 +493,7 @@ class XappNori:
                 slice_ues_lat = {}
                 slice_inst_thr = {}
                 slice_buffer_occ = {}
+                slice_ues_sinr = {}
                 for ue_id, ue_thr in ues_thr:
                     for slice_id, ues_na_slice in self.slice_ues.items():
                         if ue_id in ues_na_slice:
@@ -512,6 +519,12 @@ class XappNori:
                             slice_buffer_occ.setdefault(slice_id,[]).append(buffer_occ)
                             break
 
+                for ue_id, sinr_bins in ues_sinr:
+                    for slice_id, ues_na_slice in self.slice_ues.items():
+                        if ue_id in ues_na_slice:
+                            slice_ues_sinr.setdefault(slice_id,[]).append(sinr_bins)
+                            break
+
                 if (len(slice_ues_thr)) == 0:
                 #if (len(slice1_ues_thr) + len(slice2_ues_thr)) == 0:
                     # self.logger.warning("No UEs in the slices.")
@@ -521,29 +534,50 @@ class XappNori:
                 #print(f"DEBUG: slice_ues_thr: {slice_ues_thr}")
                 #print(f"DEBUG: slice_inst_thr: {slice_inst_thr}")
                 #print(f"DEBUG: slice_buffer_occ: {slice_buffer_occ}")
-                
-                if self.env.case_num in [1, 2, 3]: #TODO: modificar para os outros baselines
+
+                bin_sinr_db = np.array([-9.0, -3.0, 3.0, 9.0, 15.0, 21.0, 27.0])
+                bin_spectral_eff = np.log2(1.0 + 10.0 ** (bin_sinr_db / 10.0))
+
+                sinr_part = []
+                for sid in self.slice_ues:
+                    if sid in slice_ues_sinr and len(slice_ues_sinr[sid]) > 0:
+                        total_bins = np.sum(slice_ues_sinr[sid], axis=0)
+                        total_samples = np.sum(total_bins)
+                        if total_samples > 0:
+                            avg_se = float(np.dot(total_bins, bin_spectral_eff) / total_samples)
+                        else:
+                            avg_se = 0.0
+                        sinr_part.append(avg_se)
+                    else:
+                        sinr_part.append(0.0)
+                print(f"DEBUG: ues_sinr: {ues_sinr}")
+                print(f"DEBUG: sinr_part: {sinr_part}")
+
+                if self.env.case_num in [0, 1, 2, 3]: #TODO: modificar para os outros baselines
                     obs = np.array([np.mean(slice_ues_thr[sid]) for sid in self.slice_ues] + 
-                                   [np.mean(slice_ues_lat[sid]) for sid in self.slice_ues])
+                                   [np.mean(slice_ues_lat[sid]) for sid in self.slice_ues] + sinr_part
+                                   )
                 else:
                     #TODO:Testar para o caso 4
-                    obs = np.array([(np.mean(slice_ues_thr[sid]), 
-                                     np.mean(slice_buffer_occ[sid]))for sid in self.slice_ues]).flatten()
-                    #obs = np.array([slice_1_avg_thr, slice_1_avg_lat, slice_2_avg_thr, slice_2_avg_lat])
+                    base_obs = np.array([(np.mean(slice_ues_thr[sid]), 
+                                          np.mean(slice_buffer_occ[sid])) for sid in self.slice_ues]).flatten()
+                    #obs = np.concatenate([base_obs, sinr_part])
                 #print(f"DEBUG: Obs_atual: {obs}")
                 obs = np.nan_to_num(obs, nan=0)  # Replace NaN with 0
 
                 inst_slice_avg_thr = [np.mean(slice_inst_thr[sid]) for sid in self.slice_ues]
                 mean_buffer_occ = [np.mean(slice_buffer_occ[sid]) for sid in self.slice_ues]
 
-                if self.test_mode:  # Testing
-                    action = self.algo.compute_single_action(obs, explore=False)
-                    print(f"DEBUG: Test Action: {action}")
-                else:  # Training
-                    action = self.client.get_action(self.eid, obs)
-                    print(f"DEBUG: Train Action: {action}")
-                assert isinstance(action, np.ndarray), "Action must be a numpy array."
+                thr_per_action = obs[:len(self.slice_ues)] / np.maximum(self.perc_action, 1e-6)
+                print("DEBUG: perc_action", self.perc_action)
+                print("DEBUG: thr_per_action", thr_per_action)
+                obs = np.concatenate([obs, thr_per_action])
 
+                # The observation received now (obs_t) is the outcome of the action applied in the
+                # previous indication (a_{t-1}), after the RAN had time to enforce it. The reward
+                # computed from obs_t must therefore be logged BEFORE requesting the next action:
+                # RLlib accumulates log_returns and sends it together with the next get_action
+                # observation, attributing it to the previous action (a_{t-1}).
                 self.env.set_obs(obs)
                 self.env.set_inst_thr(inst_slice_avg_thr)
                 self.env.set_buffer_occ(mean_buffer_occ)
@@ -558,12 +592,22 @@ class XappNori:
                     if not self.test_mode:  # Training
                         self.client.log_returns(self.eid, reward, info=info)
                     if terminated or truncated:
-                        obs, info = self.env.reset()
+                        # Reset the environment counters but keep the real observation: it closes
+                        # the finished episode and is also the first observation of the next one.
+                        _, info = self.env.reset()
                         if not self.test_mode:  # Training
                             self.client.end_episode(self.eid, obs)
                             self.eid = self.client.start_episode(training_enabled=True)
                 else:
                     self.action_message = True
+
+                if self.test_mode:  # Testing
+                    action = self.algo.compute_single_action(obs, explore=False)
+                    print(f"DEBUG: Test Action: {action}")
+                else:  # Training
+                    action = self.client.get_action(self.eid, obs)
+                    print(f"DEBUG: Train Action: {action}")
+                assert isinstance(action, np.ndarray), "Action must be a numpy array."
                 print("")
                 if self.rl_agent or self.scheduling_algorithm == "sched-scheduler": 
                     self.perc_action = self.env.generate_action(action)
@@ -683,10 +727,21 @@ class XappNori:
         packet_loss_ues = []
         sid_ue = {}
         req_thr_ues = []#{sst_id: [] for sst_id in range(1, 4)} #TODO: handle dynamic slices
+        ues_sinr = []
+        sinr_bins_names = [
+            "L1M.RS-SINR.Bin34.UEID",
+            "L1M.RS-SINR.Bin46.UEID",
+            "L1M.RS-SINR.Bin58.UEID",
+            "L1M.RS-SINR.Bin70.UEID",
+            "L1M.RS-SINR.Bin82.UEID",
+            "L1M.RS-SINR.Bin94.UEID",
+            "L1M.RS-SINR.Bin127.UEID",
+        ]
         # UE-level PM info
         if 'list-of-matched-UEs' in data['indicationMessage'][1]:
             for ue in data['indicationMessage'][1]['list-of-matched-UEs']:
                 ue_id = ue['ueId'].decode()  # ueId is a byte string
+                sinr_bins = [0.0] * len(sinr_bins_names)
                 for pm_info in ue['list-of-PM-Information']:
                     pm_type = pm_info['pmType'][1]
                     #print("DEBUG: PM info: ", pm_info)
@@ -712,7 +767,11 @@ class XappNori:
                     elif pm_type == "DRB.PktLossRateDl.UEID":
                         ue_pkt_loss = float(pm_val[0] * math.pow(pm_val[1], pm_val[2]))
                         packet_loss_ues.append((ue_id, ue_pkt_loss))
+                    elif pm_type in sinr_bins_names:
+                        bin_idx = sinr_bins_names.index(pm_type)
+                        sinr_bins[bin_idx] = float(pm_val)
 
+                ues_sinr.append((ue_id, sinr_bins))
 
         #print("DEBUG:-->get sid_ue:", sid_ue)
         #print("DEBUG:-->get thr_ues:", thr_ues)
@@ -720,7 +779,7 @@ class XappNori:
         #print("DEBUG:-->get req_thr_ues:", req_thr_ues)
         #print("DEBUG:-->get buffer_occ_ues:", buffer_occ_ues)
         #print("DEBUG:-->get packet_loss_ues:", packet_loss_ues)
-        return thr_ues, lat_ues, sid_ue, req_thr_ues, buffer_occ_ues
+        return thr_ues, lat_ues, sid_ue, req_thr_ues, buffer_occ_ues, ues_sinr
 
     def send_ran_slicing_control(
         self, slices_id: dict, action: np.ndarray, max_rbs:int, rmrxapp: RMRXapp, summary: dict, sbuf
