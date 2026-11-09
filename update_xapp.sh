@@ -3,7 +3,10 @@
 namespace="ricxapp"
 xapp_name="xappnori"
 deployment_name="$namespace-$xapp_name"
-mode="$(echo "${MODE:-train}" | tr '[:upper:]' '[:lower:]')"
+raw_mode="${1:-${MODE:-train}}"
+raw_mode="${raw_mode#mode=}"
+raw_mode="${raw_mode#mode-=}"
+mode="$(echo "$raw_mode" | tr '[:upper:]' '[:lower:]')"
 
 case "$mode" in
     train)
@@ -107,18 +110,16 @@ docker push 127.0.0.1:5001/$xapp_name:1.0.0
 echo "----------------- Installing the xApp -----------------"
 dms_cli install $xapp_name 1.0.0 $namespace
 
-echo -n "Waiting pod creation"
-while ! kubectl get pods -n $namespace | grep $namespace-$xapp_name- | grep -q "1/1";
+echo -n "Waiting deployment creation"
+for _ in $(seq 1 30)
 do
-    if kubectl get pods -n $namespace | grep $namespace-$xapp_name- | grep -q CrashLoopBackOff; then 
-        printf "\n%s" "INSTALLATION ERROR: CrashLoopBackOff"
+    if kubectl get deployment "$deployment_name" -n "$namespace" >/dev/null 2>&1; then
+        echo " - Created"
         break
     fi
-    sleep 1 # seconds
+    sleep 1
     echo -n .
 done
-
-printf "\n"
 
 echo "----------------- Forcing deployment strategy to Recreate -----------------"
 kubectl patch deployment "$deployment_name" -n "$namespace" --type='merge' -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
@@ -177,7 +178,7 @@ fi
 echo "----------------- Verifying model mount -----------------"
 echo -n "Waiting for a Running+Ready xApp pod"
 pod_name=""
-for _ in $(seq 1 60)
+for _ in $(seq 1 90)
 do
     pod_name=$(kubectl get pods -n "$namespace" -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"|"}{range .status.conditions[*]}{.type}{"="}{.status}{";"}{end}{"\n"}{end}' \
         | grep "^$namespace-$xapp_name-" \

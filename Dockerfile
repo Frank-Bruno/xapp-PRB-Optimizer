@@ -26,7 +26,7 @@ RUN git clone --branch $rmr_version https://gerrit.oran-osc.org/r/ric-plt/lib/rm
     && echo "<<< installing rmr .so>>>" \
     && cmake .. -DDEV_PKG=0; make install
 
-FROM python:3.10
+FROM python:3.10.18
 
 #ARG frame_version=3.2.0
 ARG frame_version=i-release
@@ -50,7 +50,11 @@ ENV RMR_SEED_RT=/opt/route/routes.rt
 ENV RMR_LOG_VLEVEL=4
 
 RUN git clone -b ${frame_version} https://github.com/o-ran-sc/ric-plt-xapp-frame-py /ric-plt-xapp-frame-py/
-RUN pip install --upgrade pip && pip install certifi six python_dateutil setuptools urllib3 logger requests inotify_simple mdclogpy google-api-python-client msgpack ricsdl pycrate
+RUN pip install --upgrade pip && pip install certifi six python_dateutil  urllib3 logger requests inotify_simple mdclogpy google-api-python-client msgpack ricsdl pycrate python-dotenv
+#RUN pip install python-dotenv
+#RUN pip install --no-cache-dir --upgrade openai pydantic 
+
+
 RUN ln -s /usr/lib/x86_64-linux-musl/libc.so /lib/libc.musl-x86_64.so.1
 RUN touch /ric-plt-xapp-frame-py/ricxappframe/entities/__init__.py && touch /ric-plt-xapp-frame-py/ricxappframe/entities/rnib/__init__.py
 RUN pip install /ric-plt-xapp-frame-py/
@@ -58,12 +62,19 @@ RUN pip install /ric-plt-xapp-frame-py/
 # Install
 COPY src/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
+RUN pip install crewai
 COPY setup.py /tmp
 COPY src/ /tmp/src
 COPY init/ /tmp/init
+COPY src/.env /tmp/src.env
 RUN pip install /tmp
 
 ENV PYTHONUNBUFFERED=1
+ENV RAY_STORAGE=/opt/rl-models/ray_results
+ENV MODEL_EXPORT_DIR=/opt/rl-models/export/latest
+
+# Directory intended to be mounted by a PVC to persist trained RL models.
+RUN mkdir -p /opt/rl-models/ray_results /opt/rl-models/export/latest && chmod -R 755 /opt/rl-models
 
 # Set up ConfigMap
 RUN mkdir -p /opt/ric/config && chmod -R 755 /opt/ric/config
